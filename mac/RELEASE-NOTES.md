@@ -1,3 +1,15 @@
+## Tac Map Overlay for Mac - v0.1.1
+
+**Fixes**
+- Choose picture no longer freezes the app: the file chooser now opens on top of the Settings window, and bad or huge pictures are rejected with a message.
+- Settings closes with Esc and closes by itself when you click another app.
+
+**Safety**
+- New emergency shortcut **Control + Option + Shift + Q** closes the app instantly, even if it is stuck.
+- Quit (menu bar / Settings) now closes the app immediately.
+- Crash handler: if the app crashes it closes itself; if it freezes for 20 seconds it is closed automatically; a dialog can't stay open more than 3 minutes.
+- After a bad exit, the next start is safe (custom picture and mouse lock off) and tells you.
+
 ## Tac Map Overlay for Mac - v0.1.0 (first test version)
 
 A native Mac version of the A-TAK tablet for **Apple Silicon (M1/M2/M3/M4)**, macOS 12 or newer.

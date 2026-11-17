@@ -27,6 +27,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     private var previousApp: NSRunningApplication?
     private var pendingUpdate: UpdateInfo?
     private var lockTimer: Timer?
+    private var busySince = Date()
     private let smoke = ProcessInfo.processInfo.environment["TACOVERLAY_SMOKE"] != nil
 
     private var lastHome = ""
@@ -37,6 +38,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     // ---------------------------------------------------------------- start up
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.write("starting v\(Updater.current)")
+        CrashGuard.start()
+        var safeMode = false
+        if CrashGuard.previousRunEndedBadly && !smoke {
+            // last time the app did not close properly: start with the risky extras off
+            Log.write("previous run ended badly - safe start")
+            safeMode = true
+            settings.skinPath = nil
+            settings.lockMouse = false
+        }
         buildMainMenu()
 
         let config = WKWebViewConfiguration()
@@ -78,6 +88,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         window.orderFrontRegardless()
 
         HotKeyCenter.shared.onPress = { [weak self] in self?.toggle() }
+        HotKeyCenter.shared.onEmergency = { [weak self] in self?.forceQuit() }
+        HotKeyCenter.shared.registerEmergency()
         registerHotKey(announce: true)
         lastKeyCode = settings.hotKeyCode
         lastKeyMods = settings.hotKeyMods
@@ -91,9 +103,30 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         lockTimer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in self?.lockTick() }
         RunLoop.main.add(lockTimer!, forMode: .common)
 
+        // once a second: tell the watchdog the app is alive, and never stay stuck in a dialog for more than 3 minutes
+        let beat = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            CrashGuard.heartbeat()
+            guard let self = self else { return }
+            if self.busy > 0 && Date().timeIntervalSince(self.busySince) > 180 {
+                Log.write("a dialog was open for 3 minutes - closing it")
+                NSApp.abortModal()
+            }
+        }
+        RunLoop.main.add(beat, forMode: .common)
+        CrashGuard.startWatchdog()
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in self?.checkUpdates(manual: false) }
 
         if smoke { smokeTest() }
+
+        if safeMode {
+            let a = NSAlert()
+            a.messageText = "The app did not close properly last time"
+            a.informativeText = "To be safe it started with your custom tablet picture and the mouse lock turned off. You can turn them back on in Settings.\n\n" +
+                "If the app ever gets stuck: press Control + Option + Shift + Q to close it instantly."
+            a.addButton(withTitle: "OK")
+            present(a)
+        }
 
         if !settings.firstRunDone && !smoke {
             settings.firstRunDone = true
@@ -115,7 +148,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        HotKeyCenter.shared.unregister()
+        HotKeyCenter.shared.unregisterAll()
+        CrashGuard.cleanExit()
+    }
+
+    // Closes the app right now, no matter what it is doing (menu "Quit", Settings "Quit app", Control+Option+Shift+Q).
+    private func forceQuit() {
+        Log.write("quit")
+        HotKeyCenter.shared.unregisterAll()
+        CrashGuard.cleanExit()
+        exit(0)
     }
 
     // Used by the automatic build check on GitHub only: opens the tablet, logs what happened, quits.
@@ -208,7 +250,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     @objc private func menuHome() { loadHome(); expand() }
     @objc private func menuSettings() { openSettings() }
     @objc private func menuCheck() { checkUpdates(manual: true) }
-    @objc private func menuQuit() { NSApp.terminate(nil) }
+    @objc private func menuQuit() { forceQuit() }
     @objc private func openUpdatePage() {
         if let u = pendingUpdate, let url = URL(string: u.url) { NSWorkspace.shared.open(url) }
     }
@@ -217,6 +259,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     @discardableResult
     private func present(_ alert: NSAlert) -> NSApplication.ModalResponse {
         busy += 1
+        busySince = Date()
         NSApp.activate(ignoringOtherApps: true)
         alert.window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 3)
         let r = alert.runModal()
@@ -332,7 +375,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
 
     // Clicking the game (another app) while the mouse is free minimizes the tablet so it never covers the game.
     func applicationDidResignActive(_ notification: Notification) {
-        if expanded && !animating && !settingsOpen && busy == 0 && Date().timeIntervalSince(shownAt) > 0.8 {
+        if busy > 0 { return }
+        // the Settings window never stays around once you go to another app (unless a file chooser is open on it)
+        if settingsOpen, let sw = settingsController?.window, sw.attachedSheet == nil {
+            sw.close()
+        }
+        if expanded && !animating && !settingsOpen && Date().timeIntervalSince(shownAt) > 0.8 {
             minimize()
         }
     }
@@ -366,7 +414,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     }
 
     private func loadSkin() {
-        if let p = settings.skinPath, let img = NSImage(contentsOfFile: p) {
+        if let p = settings.skinPath, let img = AppController.readSkin(p) {
             tablet.skin = img
         } else {
             tablet.skin = nil
@@ -385,7 +433,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
                 self?.settings.skinPath = nil
                 self?.loadSkin()
             }
-            c.onQuit = { NSApp.terminate(nil) }
+            c.onQuit = { [weak self] in self?.forceQuit() }
             settingsController = c
         }
         settingsOpen = true
@@ -432,20 +480,43 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         }
     }
 
+    // The file chooser is attached to the Settings window as a sheet. (macOS shows the chooser from a separate system
+    // process, so it can not be forced above the tablet the way our own windows are - a sheet always shows on top of its window.)
     private func chooseSkin() {
-        busy += 1
+        guard let sw = settingsController?.window else { return }
         NSApp.activate(ignoringOtherApps: true)
         let panel = NSOpenPanel()
         panel.message = "Choose a PNG picture of a tablet (transparent background)"
         panel.allowedFileTypes = ["png"]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 3)
-        if panel.runModal() == .OK, let url = panel.url {
-            settings.skinPath = url.path
-            loadSkin()
+        panel.beginSheetModal(for: sw) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            DispatchQueue.main.async { self?.useSkin(path: url.path) }
         }
-        busy -= 1
+    }
+
+    private static func readSkin(_ path: String) -> NSImage? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? NSNumber, size.intValue > 0, size.intValue < 12_000_000 else { return nil }
+        guard let img = NSImage(contentsOfFile: path), img.isValid else { return nil }
+        let s = img.size
+        if s.width < 50 || s.height < 20 || s.width > 8000 || s.height > 8000 { return nil }
+        return img
+    }
+
+    private func useSkin(path: String) {
+        if AppController.readSkin(path) != nil {
+            settings.skinPath = path
+            loadSkin()
+        } else {
+            let a = NSAlert()
+            a.alertStyle = .warning
+            a.messageText = "That picture can't be used"
+            a.informativeText = "Please choose a normal PNG picture (under 12 MB) of a tablet with a transparent background."
+            a.addButton(withTitle: "OK")
+            present(a)
+        }
     }
 
     private func checkUpdates(manual: Bool) {

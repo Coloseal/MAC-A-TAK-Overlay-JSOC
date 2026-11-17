@@ -1,6 +1,13 @@
 // The settings window (opened from the tablet's gear or the menu-bar icon).
 import Cocoa
 
+// A plain window that also closes when Esc is pressed.
+final class SettingsWindow: NSWindow {
+    override func cancelOperation(_ sender: Any?) {
+        if attachedSheet == nil { close() } else { super.cancelOperation(sender) }
+    }
+}
+
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     let window: NSWindow
     var onApply: (() -> Void)?
@@ -27,7 +34,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var monitor: Any?
 
     override init() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: 540),
+        window = SettingsWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: 540),
                           styleMask: [.titled, .closable],
                           backing: .buffered, defer: false)
         super.init()

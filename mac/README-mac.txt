@@ -24,6 +24,11 @@ PRIVACY AND SAFETY
   camera and microphone are denied to web pages.
 
 TROUBLESHOOTING
+- App stuck or you want it gone right now: press Control + Option + Shift + Q (closes it instantly), or use the map icon in the
+  menu bar -> Quit. Last resort: Activity Monitor -> search 'Tac Map' -> select it -> the X button -> Force Quit.
+- The app closes itself if it crashes or freezes for 20 seconds. After a bad exit the next start is 'safe':
+  custom picture and mouse lock are turned off (turn them back on in Settings).
+- The Settings window closes by itself when you click another app, and with the Esc key.
 - Shortcut does nothing: another app may use it. Pick another in Settings.
 - Log file for bug reports: ~/Library/Logs/TacMapOverlay.log
 - Reset everything: quit the app, then in Terminal:  defaults delete io.github.coloseal.tacmapoverlay

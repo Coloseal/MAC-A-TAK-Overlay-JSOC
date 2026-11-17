@@ -1,33 +1,47 @@
-// The global shortcut (works while another app, e.g. the game, is in front). Uses Apple's hot-key API:
-// it needs no special permission and only reports the one combination you chose - it cannot see any other key.
+// The global shortcuts (work while another app, e.g. the game, is in front). Uses Apple's hot-key API:
+// it needs no special permission and only reports the exact combinations registered - it cannot see any other key.
 import Cocoa
 import Carbon.HIToolbox
 
 final class HotKeyCenter {
     static let shared = HotKeyCenter()
     var onPress: (() -> Void)?
+    var onEmergency: (() -> Void)?
     private var hotKeyRef: EventHotKeyRef?
+    private var emergencyRef: EventHotKeyRef?
     private var handlerInstalled = false
 
     private init() {}
 
-    @discardableResult
-    func register(keyCode: Int, modifiers: Int) -> Bool {
-        unregister()
-        if !handlerInstalled {
-            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-            let status = InstallEventHandler(GetApplicationEventTarget(), { (_, _, _) -> OSStatus in
+    private func ensureHandler() -> Bool {
+        if handlerInstalled { return true }
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        let status = InstallEventHandler(GetApplicationEventTarget(), { (_, event, _) -> OSStatus in
+            var hkID = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                              nil, MemoryLayout<EventHotKeyID>.size, nil, &hkID)
+            if hkID.id == 2 {
+                // emergency quit: act right here, do not wait for anything else in the app
+                HotKeyCenter.shared.onEmergency?()
+            } else {
                 DispatchQueue.main.async {
                     HotKeyCenter.shared.onPress?()
                 }
-                return noErr
-            }, 1, &spec, nil, nil)
-            if status != noErr {
-                Log.write("hotkey: could not install the handler (\(status))")
-                return false
             }
-            handlerInstalled = true
+            return noErr
+        }, 1, &spec, nil, nil)
+        if status != noErr {
+            Log.write("hotkey: could not install the handler (\(status))")
+            return false
         }
+        handlerInstalled = true
+        return true
+    }
+
+    @discardableResult
+    func register(keyCode: Int, modifiers: Int) -> Bool {
+        unregister()
+        if !ensureHandler() { return false }
         let hotKeyID = EventHotKeyID(signature: OSType(0x54414B4F), id: 1)
         var ref: EventHotKeyRef?
         let result = RegisterEventHotKey(UInt32(keyCode), UInt32(modifiers), hotKeyID, GetApplicationEventTarget(), 0, &ref)
@@ -40,10 +54,35 @@ final class HotKeyCenter {
         return false
     }
 
+    // Control + Option + Shift + Q: closes the app instantly, whatever state it is in.
+    @discardableResult
+    func registerEmergency() -> Bool {
+        if !ensureHandler() { return false }
+        let hotKeyID = EventHotKeyID(signature: OSType(0x54414B4F), id: 2)
+        var ref: EventHotKeyRef?
+        let mods = controlKey | optionKey | shiftKey
+        let result = RegisterEventHotKey(12, UInt32(mods), hotKeyID, GetApplicationEventTarget(), 0, &ref)
+        if result == noErr {
+            emergencyRef = ref
+            Log.write("emergency quit shortcut registered")
+            return true
+        }
+        Log.write("emergency shortcut: could not register (\(result))")
+        return false
+    }
+
     func unregister() {
         if let r = hotKeyRef {
             UnregisterEventHotKey(r)
             hotKeyRef = nil
+        }
+    }
+
+    func unregisterAll() {
+        unregister()
+        if let r = emergencyRef {
+            UnregisterEventHotKey(r)
+            emergencyRef = nil
         }
     }
 }
