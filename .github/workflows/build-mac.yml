@@ -1,0 +1,84 @@
+name: Build Mac app
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a GitHub release (mac-v<version>) with the zip attached"
+        type: boolean
+        default: false
+  push:
+    paths:
+      - "mac/**"
+      - ".github/workflows/build-mac.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (Apple Silicon)
+        run: |
+          sed -i '' 's/\r$//' mac/build.sh mac/VERSION mac/Info.plist.template || true
+          set +e
+          bash mac/build.sh > build.log 2>&1
+          status=$?
+          set -e
+          cat build.log
+          # show every compiler error as a readable annotation on the run page
+          grep -E ': error:' build.log | head -n 25 | while IFS= read -r line; do
+            echo "::error title=Swift compile error::$(echo "$line" | sed 's#.*/mac/##' | cut -c1-300)"
+          done
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=Build failed::exit code $status (see the log for details)"
+          fi
+          exit $status
+
+      - name: Check the app file
+        run: |
+          APP="mac/build/Tac Map Overlay.app"
+          lipo -info "$APP/Contents/MacOS/TacMapOverlay"
+          codesign -dv "$APP" 2>&1 | head -n 8
+          plutil -lint "$APP/Contents/Info.plist"
+
+      - name: Start the app once (smoke test)
+        continue-on-error: true
+        run: |
+          rm -f ~/Library/Logs/TacMapOverlay.log
+          TACOVERLAY_SMOKE=1 "mac/build/Tac Map Overlay.app/Contents/MacOS/TacMapOverlay" > smoke-out.txt 2>&1 &
+          PID=$!
+          sleep 12
+          screencapture -x smoke-screen.png || true
+          wait $PID || echo "::warning title=Smoke test::the app exited with an error code"
+          echo "----- app log -----"
+          cat ~/Library/Logs/TacMapOverlay.log || echo "(no log file)"
+          echo "----- app output -----"
+          cat smoke-out.txt
+          LOG=$(cat ~/Library/Logs/TacMapOverlay.log 2>/dev/null | tr '\n' ' ' | cut -c1-700)
+          echo "::notice title=Smoke test log::$LOG"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TacMapOverlay-mac
+          path: |
+            mac/build/*.zip
+            mac/build/*.sha256
+            smoke-screen.png
+            build.log
+          if-no-files-found: warn
+
+      - name: Publish release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(tr -d '[:space:]' < mac/VERSION)
+          ZIP="mac/build/TacMapOverlay-mac-$VERSION.zip"
+          gh release create "mac-v$VERSION" "$ZIP" "$ZIP.sha256" \
+            --title "Tac Map Overlay for Mac v$VERSION" \
+            --notes-file mac/RELEASE-NOTES.md \
+            --latest=false --prerelease --target "$GITHUB_SHA"
