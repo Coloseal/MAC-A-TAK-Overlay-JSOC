@@ -9,8 +9,8 @@ struct UpdateInfo {
 }
 
 enum Updater {
-    static let infoURL = URL(string: "https://raw.githubusercontent.com/Coloseal/A-TAK-Overlay-JSOC/main/version-mac.txt")!
-    static let fallbackPage = "https://github.com/Coloseal/A-TAK-Overlay-JSOC/releases"
+    static let infoURL = URL(string: "https://raw.githubusercontent.com/Coloseal/MAC-A-TAK-Overlay-JSOC/main/version-mac.txt")!
+    static let fallbackPage = "https://github.com/Coloseal/MAC-A-TAK-Overlay-JSOC/releases"
 
     static var current: String {
         return (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.0"

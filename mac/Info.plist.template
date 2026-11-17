@@ -15,7 +15,7 @@
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
-    <key>NSHumanReadableCopyright</key><string>MIT License. Open source: github.com/Coloseal/A-TAK-Overlay-JSOC</string>
+    <key>NSHumanReadableCopyright</key><string>MIT License. Open source: github.com/Coloseal/MAC-A-TAK-Overlay-JSOC</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key><true/>
