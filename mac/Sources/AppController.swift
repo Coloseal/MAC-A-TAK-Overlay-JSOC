@@ -417,7 +417,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         if let p = settings.skinPath, let img = AppController.readSkin(p) {
             tablet.skin = img
         } else {
-            tablet.skin = nil
+            if let url = Bundle.main.resourceURL?.appendingPathComponent("default-tablet.png"),
+               let img = AppController.readSkin(url.path) {
+                tablet.skin = img
+            } else {
+                tablet.skin = nil
+            }
         }
     }
 
