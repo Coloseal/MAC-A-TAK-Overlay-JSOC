@@ -16,6 +16,10 @@ swiftc -O -target arm64-apple-macos12.0 \
     Sources/*.swift \
     -framework Cocoa -framework WebKit -framework Carbon
 
+cp Resources/default-tablet.png "$APP/Contents/Resources/default-tablet.png"
+cp Resources/AppIcon.png "$APP/Contents/Resources/AppIcon.png"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+
 sed "s/__VERSION__/$VERSION/g" Info.plist.template > "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 

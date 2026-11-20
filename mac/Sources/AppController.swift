@@ -206,11 +206,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     private func buildStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            if let img = NSImage(systemSymbolName: "map", accessibilityDescription: "Tac Map Overlay") {
-                img.isTemplate = true
+            if let url = Bundle.main.resourceURL?.appendingPathComponent("AppIcon.png"),
+               let img = NSImage(contentsOf: url) {
+                img.size = NSSize(width: 18, height: 18)
+                img.isTemplate = false
                 button.image = img
             } else {
-                button.title = "TAK"
+                if let img = NSImage(systemSymbolName: "map", accessibilityDescription: "Tac Map Overlay") {
+                    img.isTemplate = true
+                    button.image = img
+                } else {
+                    button.title = "TAK"
+                }
             }
         }
         statusItem = item
@@ -417,7 +424,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         if let p = settings.skinPath, let img = AppController.readSkin(p) {
             tablet.skin = img
         } else {
-            tablet.skin = nil
+            if let url = Bundle.main.resourceURL?.appendingPathComponent("default-tablet.png"),
+               let img = AppController.readSkin(url.path) {
+                tablet.skin = img
+            } else {
+                tablet.skin = nil
+            }
         }
     }
 

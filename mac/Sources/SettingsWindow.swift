@@ -124,7 +124,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
         _ = label("Tablet picture (PNG with a transparent background, same shape)", top: 382)
         _ = button("Choose picture...", x: 20, top: 404, w: 160, action: #selector(chooseSkin))
-        _ = button("Use the built-in art", x: 190, top: 404, w: 170, action: #selector(resetSkin))
+        _ = button("Use supplied case", x: 190, top: 404, w: 170, action: #selector(resetSkin))
 
         _ = button("Clear browsing data", x: 20, top: 450, w: 160, action: #selector(clearData))
         _ = button("Check for updates", x: 190, top: 450, w: 170, action: #selector(checkUpdate))
