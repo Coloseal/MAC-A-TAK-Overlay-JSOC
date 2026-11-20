@@ -11,14 +11,10 @@ rm -rf build
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "Compiling v$VERSION ..."
-swiftc -O -target arm64-apple-macos12.0 \
+swiftc -O -swift-version 5 -target arm64-apple-macos12.0 \
     -o "$APP/Contents/MacOS/TacMapOverlay" \
     Sources/*.swift \
-    -framework Cocoa -framework WebKit -framework Carbon
-
-cp Resources/default-tablet.png "$APP/Contents/Resources/default-tablet.png"
-cp Resources/AppIcon.png "$APP/Contents/Resources/AppIcon.png"
-cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+    -framework Cocoa -framework WebKit -framework Carbon -framework ServiceManagement
 
 sed "s/__VERSION__/$VERSION/g" Info.plist.template > "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"

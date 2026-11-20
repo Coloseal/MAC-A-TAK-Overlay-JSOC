@@ -1,5 +1,6 @@
-// The heart of the app: the see-through window with the tablet, opening / minimizing, the mouse lock, the menu-bar icon,
-// the web view rules and the glue to settings, hotkey and updates.
+// The heart of the app: the see-through window with the tablet, opening / minimizing, the frameless live corner view, the
+// mouse lock, the menu-bar icon, the web view rules and the glue to settings, shortcuts and updates.
+// (What the buttons DO is in AppActions.swift.)
 import Cocoa
 import WebKit
 import QuartzCore
@@ -9,42 +10,69 @@ final class OverlayWindow: NSWindow {
     override var canBecomeMain: Bool { return false }
 }
 
+enum TabletState {
+    case docked      // minimized: the little tablet in the corner
+    case open        // expanded
+    case live        // minimized with the live view on: no frame, just the screen in the corner
+}
+
 final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
-    private let settings = Settings.shared
-    private var window: OverlayWindow!
-    private var tablet: TabletView!
-    private var web: WKWebView!
-    private var ruleList: WKContentRuleList?
-    private var statusItem: NSStatusItem?
-    private var settingsController: SettingsWindowController?
+    let settings = Settings.shared
+    var window: OverlayWindow!
+    var tablet: TabletView!
+    var web: WKWebView!
+    var ruleList: WKContentRuleList?
+    var statusItem: NSStatusItem?
+    var settingsController: SettingsWindowController?
+    let clock = Clockwork()
+    var notesPanel: NotesPanel!
+    var toolsPanel: ToolsPanel!
 
-    private var expanded = false
-    private var animating = false
-    private var settingsOpen = false
-    private var busy = 0
-    private var hotKeyWorks = false
-    private var shownAt = Date.distantPast
-    private var previousApp: NSRunningApplication?
-    private var pendingUpdate: UpdateInfo?
-    private var lockTimer: Timer?
-    private var busySince = Date()
-    private let smoke = ProcessInfo.processInfo.environment["TACOVERLAY_SMOKE"] != nil
+    var state: TabletState = .docked
+    var animating = false
+    var settingsOpen = false
+    var busy = 0
+    var busySince = Date()
+    var hotKeyWorks = false
+    var shownAt = Date.distantPast
+    var previousApp: NSRunningApplication?
+    var pendingUpdate: UpdateInfo?
+    var lockTimer: Timer?
+    var infoTimer: Timer?
+    var gameTimer: Timer?
+    var liveDragTimer: Timer?
+    var liveDrag = false
+    var notesVisible = false
+    var toolsVisible = false
+    var toolsTab = 0
+    var softPage = 0
+    var peekActive = false
+    var pendingPeekClose = false
+    var focusNotesOnOpen = false
+    var gameHidden = false
+    var lastSig = ""
+    var toastText: String?
+    var toastTimer: Timer?
+    var lastHome = ""
+    var lastAdBlock = true
+    var noSave = false
+    let selftestDir = ProcessInfo.processInfo.environment["TACOVERLAY_SELFTEST"]
 
-    private var lastHome = ""
-    private var lastAdBlock = true
-    private var lastKeyCode = -1
-    private var lastKeyMods = -1
+    var layoutDef: Layout { return Layout.named(settings.layout) }
+    var currentTheme: Theme { return Themes.named(settings.layout == "pilot" ? settings.pilotTheme : settings.theme) }
+    var testing: Bool { return selftestDir != nil }
 
     // ---------------------------------------------------------------- start up
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.write("starting v\(Updater.current)")
         CrashGuard.start()
         var safeMode = false
-        if CrashGuard.previousRunEndedBadly && !smoke {
+        if CrashGuard.previousRunEndedBadly && !testing {
             // last time the app did not close properly: start with the risky extras off
             Log.write("previous run ended badly - safe start")
             safeMode = true
-            settings.skinPath = nil
+            settings.setSkinPath(nil, for: "atak")
+            settings.setSkinPath(nil, for: "pilot")
             settings.lockMouse = false
         }
         buildMainMenu()
@@ -53,6 +81,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         config.websiteDataStore = WKWebsiteDataStore.default()
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         config.preferences.isFraudulentWebsiteWarningEnabled = true
+        config.mediaTypesRequiringUserActionForPlayback = []
         web = WKWebView(frame: NSRect(x: 0, y: 0, width: 600, height: 300), configuration: config)
         web.navigationDelegate = self
         web.uiDelegate = self
@@ -60,48 +89,63 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         web.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
         web.underPageBackgroundColor = NSColor(srgbRed: 0.05, green: 0.06, blue: 0.045, alpha: 1.0)
 
+        notesPanel = NotesPanel()
+        notesPanel.onClose = { [weak self] in self?.setNotes(false) }
+        notesPanel.onEsc = { [weak self] in self?.focusPage() }
+        toolsPanel = ToolsPanel()
+        toolsPanel.onClose = { [weak self] in self?.showTools(false) }
+        toolsPanel.onEsc = { [weak self] in self?.focusPage() }
+
         tablet = TabletView(web: web)
-        tablet.theme = Themes.named(settings.theme)
-        loadSkin()
+        tablet.layoutDef = layoutDef
+        tablet.theme = currentTheme
+        tablet.pageWidthCSS = settings.pageWidth
+        tablet.hud.clock = clock
         tablet.onDockClick = { [weak self] in self?.expand() }
-        tablet.onGear = { [weak self] in self?.openSettings() }
-        tablet.onGlobe = { [weak self] in self?.toggleBar() }
+        tablet.onDockMoved = { [weak self] in self?.dockWasMoved() }
+        tablet.onAction = { [weak self] id in self?.press(id) }
+        tablet.hud.onAction = { [weak self] id in self?.press(id) }
+        tablet.dragCatcher.onFinish = { [weak self] in self?.endLiveDrag() }
         tablet.bar.onBack = { [weak self] in self?.web.goBack() }
         tablet.bar.onForward = { [weak self] in self?.web.goForward() }
         tablet.bar.onReload = { [weak self] in self?.web.reload() }
         tablet.bar.onHome = { [weak self] in self?.loadHome() }
         tablet.bar.onGo = { [weak self] text in self?.go(text) }
+        loadSkin()
 
         let screen = currentScreen()
-        window = OverlayWindow(contentRect: dockedFrame(on: screen), styleMask: [.borderless], backing: .buffered, defer: false)
+        window = OverlayWindow(contentRect: dockFrame(on: screen), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = NSColor.clear
         window.hasShadow = false
         window.level = NSWindow.Level.screenSaver
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentView = tablet
-        window.alphaValue = CGFloat(max(25.0, min(100.0, settings.opacity)) / 100.0)
         tablet.showContent(false)
+        applyWindowAlpha()
         window.orderFrontRegardless()
 
-        HotKeyCenter.shared.onPress = { [weak self] in self?.toggle() }
+        clock.onAlert = { [weak self] i in self?.timerAlert(i) }
+        HotKeyCenter.shared.onEvent = { [weak self] id, pressed in self?.handleHotKey(id: id, pressed: pressed) }
         HotKeyCenter.shared.onEmergency = { [weak self] in self?.forceQuit() }
         HotKeyCenter.shared.registerEmergency()
-        registerHotKey(announce: true)
-        lastKeyCode = settings.hotKeyCode
-        lastKeyMods = settings.hotKeyMods
+        registerHotKeys(announce: true)
 
         lastHome = settings.homeURL
         lastAdBlock = settings.adBlock
+        registerScripts()
         applyAdBlock { [weak self] in self?.loadHome() }
 
         buildStatusItem()
 
         lockTimer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in self?.lockTick() }
         RunLoop.main.add(lockTimer!, forMode: .common)
+        infoTimer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.infoTick() }
+        RunLoop.main.add(infoTimer!, forMode: .common)
+        gameTimer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.gameTick() }
+        RunLoop.main.add(gameTimer!, forMode: .common)
 
         // once a second: tell the watchdog the app is alive, and never stay stuck in a dialog for more than 3 minutes
         let beat = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -114,32 +158,39 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         }
         RunLoop.main.add(beat, forMode: .common)
         CrashGuard.startWatchdog()
+        refreshUI()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in self?.checkUpdates(manual: false) }
-
-        if smoke { smokeTest() }
+        if !testing {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in self?.checkUpdates(manual: false) }
+        }
 
         if safeMode {
             let a = NSAlert()
             a.messageText = "The app did not close properly last time"
-            a.informativeText = "To be safe it started with your custom tablet picture and the mouse lock turned off. You can turn them back on in Settings.\n\n" +
+            a.informativeText = "To be safe it started with your custom tablet pictures and the mouse lock turned off. You can turn them back on in Settings.\n\n" +
                 "If the app ever gets stuck: press Control + Option + Shift + Q to close it instantly."
             a.addButton(withTitle: "OK")
             present(a)
         }
 
-        if !settings.firstRunDone && !smoke {
+        if !settings.firstRunDone && !testing {
             settings.firstRunDone = true
             let a = NSAlert()
             a.messageText = "Tac Map Overlay is running"
             a.informativeText = "A small tablet is in the bottom-right corner of your screen and there is a map icon in the menu bar at the top.\n\n" +
-                "Press \(HotKeyText.describe(code: settings.hotKeyCode, mods: settings.hotKeyMods)) (or click the small tablet) to open it, and press it again to minimize it. " +
-                "You can change the shortcut, size and more in Settings (the gear on the tablet or the menu-bar icon).\n\n" +
+                "Press \(HotKeyText.describe(settings.hotkey(.toggle))) (or click the small tablet) to open it, and press it again to minimize it. " +
+                "You can change the shortcuts, size and more in Settings (the gear on the tablet or the menu-bar icon).\n\n" +
                 "While the tablet is open your mouse stays inside it. If that ever gets in your way, use the shortcut to minimize it."
             a.addButton(withTitle: "Open the tablet")
             present(a)
             expand()
+        } else if settings.showOnStart && !testing {
+            expand()
+        } else if settings.liveMini && !testing {
+            enterLive()
         }
+
+        if let dir = selftestDir { SelfTest.begin(app: self, dir: dir) }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -148,40 +199,24 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        notesPanel.save()
+        toolsPanel.saveAll()
         HotKeyCenter.shared.unregisterAll()
         CrashGuard.cleanExit()
     }
 
     // Closes the app right now, no matter what it is doing (menu "Quit", Settings "Quit app", Control+Option+Shift+Q).
-    private func forceQuit() {
+    func forceQuit() {
         Log.write("quit")
+        notesPanel?.save()
+        toolsPanel?.saveAll()
         HotKeyCenter.shared.unregisterAll()
         CrashGuard.cleanExit()
         exit(0)
     }
 
-    // Used by the automatic build check on GitHub only: opens the tablet, logs what happened, quits.
-    private func smokeTest() {
-        Log.write("smoke: start")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) { [weak self] in self?.expand() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) { [weak self] in
-            guard let self = self else { return }
-            Log.write("smoke: expanded=\(self.expanded) frame=\(self.window.frame) url=\(self.web.url?.absoluteString ?? "none") loading=\(self.web.isLoading) hotkey=\(self.hotKeyWorks) rules=\(self.ruleList != nil)")
-            self.web.evaluateJavaScript("document.title") { result, error in
-                Log.write("smoke: title=\(String(describing: result)) error=\(String(describing: error))")
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) { [weak self] in
-            self?.minimize()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 17.0) {
-            Log.write("smoke: done")
-            NSApp.terminate(nil)
-        }
-    }
-
     // ---------------------------------------------------------------- menus
-    private func buildMainMenu() {
+    func buildMainMenu() {
         let main = NSMenu()
         let appItem = NSMenuItem()
         main.addItem(appItem)
@@ -203,68 +238,56 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         NSApp.mainMenu = main
     }
 
-    private func buildStatusItem() {
+    func buildStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            if let url = Bundle.main.resourceURL?.appendingPathComponent("AppIcon.png"),
-               let img = NSImage(contentsOf: url) {
-                img.size = NSSize(width: 18, height: 18)
-                img.isTemplate = false
+            if let img = NSImage(systemSymbolName: "map", accessibilityDescription: "Tac Map Overlay") {
+                img.isTemplate = true
                 button.image = img
             } else {
-                if let img = NSImage(systemSymbolName: "map", accessibilityDescription: "Tac Map Overlay") {
-                    img.isTemplate = true
-                    button.image = img
-                } else {
-                    button.title = "TAK"
-                }
+                button.title = "TAK"
             }
         }
         statusItem = item
         rebuildMenu()
     }
 
-    private func rebuildMenu() {
+    func rebuildMenu() {
         guard let item = statusItem else { return }
         let menu = NSMenu()
-        if let u = pendingUpdate {
-            let m = NSMenuItem(title: "Update available: v\(u.latest) - download", action: #selector(openUpdatePage), keyEquivalent: "")
+        func add(_ title: String, _ sel: Selector, checked: Bool = false) {
+            let m = NSMenuItem(title: title, action: sel, keyEquivalent: "")
             m.target = self
+            if checked { m.state = .on }
             menu.addItem(m)
+        }
+        if let u = pendingUpdate {
+            add("Update available: v\(u.latest) - install", #selector(menuUpdate))
             menu.addItem(NSMenuItem.separator())
         }
-        let keyText = HotKeyText.describe(code: settings.hotKeyCode, mods: settings.hotKeyMods)
-        let t = NSMenuItem(title: "Open / minimize tablet     \(keyText)", action: #selector(menuToggle), keyEquivalent: "")
-        t.target = self
-        menu.addItem(t)
-        let h = NSMenuItem(title: "Go to the map (home)", action: #selector(menuHome), keyEquivalent: "")
-        h.target = self
-        menu.addItem(h)
-        let s = NSMenuItem(title: "Settings...", action: #selector(menuSettings), keyEquivalent: "")
-        s.target = self
-        menu.addItem(s)
-        let c = NSMenuItem(title: "Check for updates", action: #selector(menuCheck), keyEquivalent: "")
-        c.target = self
-        menu.addItem(c)
+        add("Open / minimize tablet     \(HotKeyText.describe(settings.hotkey(.toggle)))", #selector(menuToggle))
+        add("Notes pad", #selector(menuNotes), checked: notesVisible)
+        add("Live corner view", #selector(menuLive), checked: settings.liveMini)
+        add("Go to the map (home)", #selector(menuHome))
+        add("Settings...", #selector(menuSettings))
+        add("Check for updates", #selector(menuCheck))
         menu.addItem(NSMenuItem.separator())
-        let q = NSMenuItem(title: "Quit", action: #selector(menuQuit), keyEquivalent: "")
-        q.target = self
-        menu.addItem(q)
+        add("Quit", #selector(menuQuit))
         item.menu = menu
     }
 
-    @objc private func menuToggle() { toggle() }
-    @objc private func menuHome() { loadHome(); expand() }
-    @objc private func menuSettings() { openSettings() }
-    @objc private func menuCheck() { checkUpdates(manual: true) }
-    @objc private func menuQuit() { forceQuit() }
-    @objc private func openUpdatePage() {
-        if let u = pendingUpdate, let url = URL(string: u.url) { NSWorkspace.shared.open(url) }
-    }
+    @objc func menuToggle() { toggle() }
+    @objc func menuNotes() { notesHotkey() }
+    @objc func menuLive() { setLiveMini(!settings.liveMini) }
+    @objc func menuHome() { loadHome(); expand() }
+    @objc func menuSettings() { openSettings() }
+    @objc func menuCheck() { checkUpdates(manual: true) }
+    @objc func menuQuit() { forceQuit() }
+    @objc func menuUpdate() { runUpdate() }
 
     // ---------------------------------------------------------------- helpers
     @discardableResult
-    private func present(_ alert: NSAlert) -> NSApplication.ModalResponse {
+    func present(_ alert: NSAlert) -> NSApplication.ModalResponse {
         busy += 1
         busySince = Date()
         NSApp.activate(ignoringOtherApps: true)
@@ -274,44 +297,89 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         return r
     }
 
-    private func currentScreen() -> NSScreen {
+    func currentScreen() -> NSScreen {
         let p = NSEvent.mouseLocation
         for s in NSScreen.screens where NSMouseInRect(p, s.frame, false) { return s }
         if let w = window, let s = w.screen { return s }
         return NSScreen.main ?? NSScreen.screens[0]
     }
 
-    private func expandedSize(on screen: NSScreen) -> NSSize {
+    func clampInto(_ r: NSRect, _ area: NSRect) -> NSRect {
+        var o = r
+        o.origin.x = max(area.minX, min(o.origin.x, area.maxX - o.width))
+        o.origin.y = max(area.minY, min(o.origin.y, area.maxY - o.height))
+        return o
+    }
+
+    func openFrame(on screen: NSScreen) -> NSRect {
+        let L = layoutDef
         let vf = screen.visibleFrame
-        var w = vf.width * CGFloat(settings.sizePct / 100.0)
-        var h = w * TabletView.logical.height / TabletView.logical.width
+        var w = vf.width * CGFloat(settings.openSize) / 100.0
+        var h = L.height(forWidth: w)
         let maxH = vf.height * 0.95
         if h > maxH {
             h = maxH
-            w = h * TabletView.logical.width / TabletView.logical.height
+            w = h * L.logical.width / L.logical.height
         }
-        return NSSize(width: w.rounded(), height: h.rounded())
-    }
-
-    private func expandedFrame(on screen: NSScreen) -> NSRect {
-        let size = expandedSize(on: screen)
-        if let o = settings.openOrigin {
-            let r = NSRect(origin: o, size: size)
-            let mid = NSPoint(x: r.midX, y: r.midY)
-            for s in NSScreen.screens where NSMouseInRect(mid, s.frame, false) { return r }
+        w = w.rounded()
+        h = h.rounded()
+        var r = NSRect(x: (vf.midX - w / 2).rounded(), y: (vf.midY - h / 2).rounded(), width: w, height: h)
+        switch settings.anchor {
+        case "bottomright":
+            r.origin = NSPoint(x: vf.maxX - w - 16, y: vf.minY + 16)
+        case "custom":
+            if let o = settings.openOrigin {
+                let mid = NSPoint(x: o.x + w / 2, y: o.y + h / 2)
+                for s in NSScreen.screens where NSMouseInRect(mid, s.frame, false) { r.origin = o }
+            }
+        default:
+            break
         }
-        let vf = screen.visibleFrame
-        return NSRect(x: (vf.midX - size.width / 2).rounded(), y: (vf.midY - size.height / 2).rounded(), width: size.width, height: size.height)
+        return clampInto(r, vf)
     }
 
-    private func dockedFrame(on screen: NSScreen) -> NSRect {
+    func dockFrame(on screen: NSScreen) -> NSRect {
         let vf = screen.visibleFrame
-        let w = CGFloat(max(200.0, min(700.0, settings.dockWidth)))
-        let h = (w * TabletView.logical.height / TabletView.logical.width).rounded()
-        return NSRect(x: vf.maxX - w - 16, y: vf.minY + 16, width: w, height: h)
+        let w = CGFloat(settings.dockWidth)
+        let h = layoutDef.height(forWidth: w).rounded()
+        var r = NSRect(x: vf.maxX - w - 16, y: vf.minY + 16, width: w, height: h)
+        if let dx = settings.dockX, let dy = settings.dockY {
+            r.origin = NSPoint(x: screen.frame.minX + CGFloat(dx), y: screen.frame.maxY - CGFloat(dy) - h)
+            r = clampInto(r, screen.frame)
+        }
+        return r
     }
 
-    private func animateFrame(to frame: NSRect, completion: @escaping () -> Void) {
+    func liveFrame(on screen: NSScreen) -> NSRect {
+        let L = layoutDef
+        let f = screen.frame
+        var w = f.width * CGFloat(settings.livePct) / 100.0
+        var h = L.height(forWidth: w)
+        let maxH = f.height * 0.6
+        if h > maxH {
+            h = maxH
+            w = h * L.logical.width / L.logical.height
+        }
+        w = w.rounded()
+        h = h.rounded()
+        var x = screen.visibleFrame.maxX - w
+        var y = screen.visibleFrame.minY
+        if let lx = settings.liveX { x = f.minX + CGFloat(lx) }
+        if let ly = settings.liveY { y = f.maxY - CGFloat(ly) - h }
+        return clampInto(NSRect(x: x, y: y, width: w, height: h), f)
+    }
+
+    // where the tablet goes when it is minimized
+    func minimizedFrame(on screen: NSScreen) -> NSRect {
+        return settings.liveMini ? liveFrame(on: screen) : dockFrame(on: screen)
+    }
+
+    func applyWindowAlpha() {
+        let pct = state == .open ? settings.opacity : settings.dockOpacity
+        window.alphaValue = CGFloat(max(25, min(100, pct))) / 100.0
+    }
+
+    func animateFrame(to frame: NSRect, completion: @escaping () -> Void) {
         if !settings.animate {
             window.setFrame(frame, display: true)
             completion()
@@ -326,75 +394,234 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         })
     }
 
-    // ---------------------------------------------------------------- open / minimize
-    private func toggle() {
-        if animating { return }
-        if expanded { minimize() } else { expand() }
+    func loadSkin() {
+        if let p = settings.skinPath(for: settings.layout), let img = AppController.readSkin(p) {
+            tablet.skin = img
+        } else {
+            tablet.skin = nil
+        }
     }
 
-    private func expand() {
-        if animating || expanded { return }
+    func syncLayout() {
+        if tablet.layoutDef.id != layoutDef.id { tablet.layoutDef = layoutDef }
+        tablet.theme = currentTheme
+        loadSkin()
+    }
+
+    static func readSkin(_ path: String) -> NSImage? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? NSNumber, size.intValue > 0, size.intValue < 12_000_000 else { return nil }
+        guard let img = NSImage(contentsOfFile: path), img.isValid else { return nil }
+        let s = img.size
+        if s.width < 50 || s.height < 20 || s.width > 8000 || s.height > 8000 { return nil }
+        return img
+    }
+
+    // ---------------------------------------------------------------- open / minimize / live
+    func toggle() {
+        if animating { return }
+        if state == .open { minimize() } else { expand() }
+    }
+
+    func expand() {
+        if animating || state == .open { return }
         let me = NSRunningApplication.current
         if let f = NSWorkspace.shared.frontmostApplication, f.processIdentifier != me.processIdentifier {
             previousApp = f
         }
-        let target = expandedFrame(on: currentScreen())
+        if gameHidden { gameHidden = false }
+        let target = openFrame(on: currentScreen())
+        let fromLive = (state == .live)
         animating = true
+        if fromLive {
+            // coming out of the live view: draw the frame over it first (same size and place), then expand from there
+            liveDrag = false
+            tablet.dragActive = false
+            window.ignoresMouseEvents = false
+        }
+        state = .open
         tablet.isExpanded = false
+        tablet.mode = .art
         tablet.showContent(false)
+        syncLayout()
+        applyWindowAlpha()
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
-        animateFrame(to: target) { [weak self] in
-            guard let self = self else { return }
-            self.expanded = true
-            self.animating = false
-            self.shownAt = Date()
-            self.tablet.isExpanded = true
-            self.tablet.showContent(true)
-            self.window.makeKeyAndOrderFront(nil)
-            self.window.makeFirstResponder(self.web)
+        if fromLive { notifyPage() }
+        refreshUI()
+        animateFrame(to: target) { [weak self] in self?.finishOpen() }
+    }
+
+    func finishOpen() {
+        animating = false
+        shownAt = Date()
+        tablet.isExpanded = true
+        tablet.pageWidthCSS = settings.pageWidth
+        applySidePanel()
+        tablet.showContent(true)
+        window.makeKeyAndOrderFront(nil)
+        if focusNotesOnOpen && notesVisible {
+            focusNotesOnOpen = false
+            notesPanel.focusBox()
+        } else {
+            window.makeFirstResponder(web)
+        }
+        refreshUI()
+        notifyPage()
+        if pendingPeekClose {
+            pendingPeekClose = false
+            DispatchQueue.main.async { [weak self] in self?.minimize() }
         }
     }
 
-    private func minimize() {
-        if animating || !expanded { return }
-        settings.openOrigin = window.frame.origin
+    func minimize() {
+        if animating || state != .open { return }
+        saveOpenPosition()
         let screen = window.screen ?? currentScreen()
         animating = true
-        expanded = false
+        state = .docked
         tablet.isExpanded = false
         tablet.showContent(false)
-        animateFrame(to: dockedFrame(on: screen)) { [weak self] in
-            guard let self = self else { return }
-            self.animating = false
-            if let prev = self.previousApp {
-                prev.activate(options: [])
-                self.previousApp = nil
-            }
-        }
+        applyWindowAlpha()
+        refreshUI()
+        animateFrame(to: minimizedFrame(on: screen)) { [weak self] in self?.finishClose() }
     }
 
+    func finishClose() {
+        animating = false
+        if settings.liveMini { enterLive() } else { applyWindowAlpha() }
+        if let prev = previousApp {
+            prev.activate(options: [])
+            previousApp = nil
+        }
+        refreshUI()
+        notifyPage()
+    }
+
+    // the little minimized tablet was dragged somewhere: remember the place
+    func dockWasMoved() {
+        guard state == .docked, !animating else { return }
+        let f = window.frame
+        let screen = window.screen ?? currentScreen()
+        settings.dockX = Double(f.minX - screen.frame.minX)
+        settings.dockY = Double(screen.frame.maxY - f.maxY)
+    }
+
+    func saveOpenPosition() {
+        settings.openOrigin = window.frame.origin
+    }
+
+    // minimized + live view on: no frame, only the screen in the corner (click-through: the game keeps the mouse)
+    func enterLive() {
+        if state == .open || animating { return }
+        state = .live
+        let screen = window.screen ?? currentScreen()
+        tablet.isExpanded = false
+        tablet.mode = .live
+        window.setFrame(liveFrame(on: screen), display: true)
+        tablet.pageWidthCSS = settings.pageWidth
+        tablet.showContent(true)
+        window.ignoresMouseEvents = !liveDrag
+        applyWindowAlpha()
+        window.orderFrontRegardless()
+        refreshUI()
+        notifyPage()
+        if pendingLiveMove { pendingLiveMove = false; setLiveDrag(true) }
+    }
+
+    // back from the live view to the little tablet (the live setting was switched off)
+    func leaveLive() {
+        if state != .live { return }
+        liveDrag = false
+        tablet.dragActive = false
+        window.ignoresMouseEvents = false
+        state = .docked
+        tablet.mode = .art
+        tablet.showContent(false)
+        syncLayout()
+        window.setFrame(dockFrame(on: window.screen ?? currentScreen()), display: true)
+        applyWindowAlpha()
+        refreshUI()
+        notifyPage()
+    }
+
+    func setLiveMini(_ on: Bool) {
+        if settings.liveMini == on { return }
+        settings.liveMini = on
+        rebuildMenu()
+        if state != .open && !animating {
+            if on { enterLive() } else { leaveLive() }
+        }
+        refreshUI()
+        if on && state == .open { showToast("Live screen is ON: minimize the tablet and the screen stays in the corner, without the frame.") }
+    }
+
+    // ---- moving the live view by hand
+    func setLiveDrag(_ on: Bool) {
+        if on && !(state == .live && !animating) { return }
+        liveDrag = on
+        tablet.dragActive = on
+        window.ignoresMouseEvents = !on
+        liveDragTimer?.invalidate()
+        if on {
+            liveDragTimer = Timer.scheduledTimer(withTimeInterval: 12.0, repeats: false) { [weak self] _ in self?.setLiveDrag(false) }
+        }
+        refreshUI()
+    }
+
+    func toggleLiveDrag() {
+        if !settings.liveMini { showToast("Switch the LIVE view on first."); return }
+        if state == .open { showToast("Minimize the tablet first, then move the live view."); return }
+        setLiveDrag(!liveDrag)
+    }
+
+    func endLiveDrag() {
+        guard state == .live else { return }
+        let f = window.frame
+        let screen = window.screen ?? currentScreen()
+        let b = screen.frame
+        // snaps to the corner / bottom when dropped near it
+        settings.liveX = f.maxX >= b.maxX - 30 ? nil : Double(f.minX - b.minX)
+        settings.liveY = f.minY <= screen.visibleFrame.minY + 30 ? nil : Double(b.maxY - f.maxY)
+        setLiveDrag(false)
+        window.setFrame(liveFrame(on: screen), display: true)
+    }
+
+    // Settings > "Move it by hand"
+    func moveLiveByHand() {
+        if !settings.liveMini { setLiveMini(true) }
+        if state == .open && !animating {
+            pendingLiveMove = true
+            minimize()
+        } else if state == .live {
+            setLiveDrag(true)
+        }
+    }
+    var pendingLiveMove = false
+
     func windowDidMove(_ notification: Notification) {
-        if expanded && !animating {
+        if state == .open && !animating && tablet.isExpanded {
             settings.openOrigin = window.frame.origin
+            settings.anchor = "custom"
         }
     }
 
     // Clicking the game (another app) while the mouse is free minimizes the tablet so it never covers the game.
     func applicationDidResignActive(_ notification: Notification) {
         if busy > 0 { return }
+        peekActive = false
         // the Settings window never stays around once you go to another app (unless a file chooser is open on it)
         if settingsOpen, let sw = settingsController?.window, sw.attachedSheet == nil {
             sw.close()
         }
-        if expanded && !animating && !settingsOpen && Date().timeIntervalSince(shownAt) > 0.8 {
+        if state == .open && !animating && !settingsOpen && Date().timeIntervalSince(shownAt) > 0.8 {
             minimize()
         }
     }
 
     // ---------------------------------------------------------------- mouse lock
-    private func lockTick() {
-        if !expanded || animating || settingsOpen || busy > 0 { return }
+    func lockTick() {
+        if state != .open || animating || settingsOpen || busy > 0 { return }
         if !settings.lockMouse || !hotKeyWorks || !NSApp.isActive { return }
         let p = NSEvent.mouseLocation
         let r = window.frame.insetBy(dx: 2, dy: 2)
@@ -405,160 +632,312 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         _ = CGWarpMouseCursorPosition(CGPoint(x: cx, y: primaryHeight - cy))
     }
 
-    // ---------------------------------------------------------------- settings glue
-    private func registerHotKey(announce: Bool) {
-        let ok = HotKeyCenter.shared.register(keyCode: settings.hotKeyCode, modifiers: settings.hotKeyMods)
-        hotKeyWorks = ok
-        if !ok && announce {
-            let a = NSAlert()
-            a.alertStyle = .warning
-            a.messageText = "That shortcut can't be used"
-            a.informativeText = "\(HotKeyText.describe(code: settings.hotKeyCode, mods: settings.hotKeyMods)) is already taken by another app. " +
-                "Pick a different one in Settings. Until then, open the tablet from the map icon in the menu bar. The mouse lock is switched off while there is no working shortcut."
-            a.addButton(withTitle: "OK")
-            present(a)
+    // ---------------------------------------------------------------- game-aware: only show while the game is in front
+    func gameTick() {
+        if !settings.gameOnly || state == .open || animating {
+            if gameHidden { gameHidden = false; window.orderFrontRegardless() }
+            return
+        }
+        var isGame = true
+        let want = settings.gameProcess.lowercased()
+        if !want.isEmpty, let f = NSWorkspace.shared.frontmostApplication, f.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            let name = (f.localizedName ?? "").lowercased()
+            let bid = (f.bundleIdentifier ?? "").lowercased()
+            let exe = (f.executableURL?.lastPathComponent ?? "").lowercased()
+            isGame = name.contains(want) || bid.contains(want) || exe.contains(want)
+        }
+        if !isGame && !gameHidden {
+            gameHidden = true
+            window.orderOut(nil)
+        } else if isGame && gameHidden {
+            gameHidden = false
+            window.orderFrontRegardless()
         }
     }
 
-    private func loadSkin() {
-        if let p = settings.skinPath, let img = AppController.readSkin(p) {
-            tablet.skin = img
-        } else {
-            if let url = Bundle.main.resourceURL?.appendingPathComponent("default-tablet.png"),
-               let img = AppController.readSkin(url.path) {
-                tablet.skin = img
+    // ---------------------------------------------------------------- shortcuts
+    func registerHotKeys(announce: Bool) {
+        var failed: [String] = []
+        for a in HotAction.allCases {
+            if let spec = settings.hotkey(a) {
+                let ok = HotKeyCenter.shared.register(id: a.id, code: spec.code, modifiers: spec.mods)
+                if !ok { failed.append(a.title + "  " + HotKeyText.describe(spec)) }
+                if a == .toggle { hotKeyWorks = ok }
             } else {
-                tablet.skin = nil
+                HotKeyCenter.shared.unregister(id: a.id)
+                if a == .toggle { hotKeyWorks = false }
             }
         }
-    }
-
-    private func openSettings() {
-        if settingsController == nil {
-            let c = SettingsWindowController()
-            c.onApply = { [weak self] in self?.applyAll() }
-            c.onClose = { [weak self] in self?.settingsOpen = false }
-            c.onClearData = { [weak self] in self?.clearData() }
-            c.onCheckUpdate = { [weak self] in self?.checkUpdates(manual: true) }
-            c.onChooseSkin = { [weak self] in self?.chooseSkin() }
-            c.onResetSkin = { [weak self] in
-                self?.settings.skinPath = nil
-                self?.loadSkin()
-            }
-            c.onQuit = { [weak self] in self?.forceQuit() }
-            settingsController = c
-        }
-        settingsOpen = true
-        settingsController?.show()
-    }
-
-    private func applyAll() {
-        tablet.theme = Themes.named(settings.theme)
-        window.alphaValue = CGFloat(max(25.0, min(100.0, settings.opacity)) / 100.0)
-        if settings.homeURL != lastHome {
-            lastHome = settings.homeURL
-            loadHome()
-        }
-        if settings.adBlock != lastAdBlock {
-            lastAdBlock = settings.adBlock
-            applyAdBlock(then: nil)
-        }
-        if settings.hotKeyCode != lastKeyCode || settings.hotKeyMods != lastKeyMods {
-            lastKeyCode = settings.hotKeyCode
-            lastKeyMods = settings.hotKeyMods
-            registerHotKey(announce: true)
-            rebuildMenu()
-        }
-        if expanded && !animating {
-            let size = expandedSize(on: window.screen ?? currentScreen())
-            if abs(window.frame.width - size.width) > 1.0 {
-                let f = window.frame
-                let nf = NSRect(x: (f.midX - size.width / 2).rounded(), y: (f.midY - size.height / 2).rounded(), width: size.width, height: size.height)
-                window.setFrame(nf, display: true)
-            }
-        }
-    }
-
-    private func clearData() {
-        let store = WKWebsiteDataStore.default()
-        store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: Date(timeIntervalSince1970: 0)) { [weak self] in
-            DispatchQueue.main.async {
-                let a = NSAlert()
-                a.messageText = "Browsing data cleared"
-                a.informativeText = "Cookies, saved logins and site data were removed."
-                a.addButton(withTitle: "OK")
-                self?.present(a)
-            }
-        }
-    }
-
-    // The file chooser is attached to the Settings window as a sheet. (macOS shows the chooser from a separate system
-    // process, so it can not be forced above the tablet the way our own windows are - a sheet always shows on top of its window.)
-    private func chooseSkin() {
-        guard let sw = settingsController?.window else { return }
-        NSApp.activate(ignoringOtherApps: true)
-        let panel = NSOpenPanel()
-        panel.message = "Choose a PNG picture of a tablet (transparent background)"
-        panel.allowedFileTypes = ["png"]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.beginSheetModal(for: sw) { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            DispatchQueue.main.async { self?.useSkin(path: url.path) }
-        }
-    }
-
-    private static func readSkin(_ path: String) -> NSImage? {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-              let size = attrs[.size] as? NSNumber, size.intValue > 0, size.intValue < 12_000_000 else { return nil }
-        guard let img = NSImage(contentsOfFile: path), img.isValid else { return nil }
-        let s = img.size
-        if s.width < 50 || s.height < 20 || s.width > 8000 || s.height > 8000 { return nil }
-        return img
-    }
-
-    private func useSkin(path: String) {
-        if AppController.readSkin(path) != nil {
-            settings.skinPath = path
-            loadSkin()
-        } else {
+        if !failed.isEmpty && announce && !testing {
             let a = NSAlert()
             a.alertStyle = .warning
-            a.messageText = "That picture can't be used"
-            a.informativeText = "Please choose a normal PNG picture (under 12 MB) of a tablet with a transparent background."
+            a.messageText = "Some shortcuts can't be used"
+            a.informativeText = "These are already taken by another app:\n\n" + failed.joined(separator: "\n") +
+                "\n\nPick different ones in Settings. You can always open the tablet from the map icon in the menu bar. " +
+                "The mouse lock is switched off while the open / minimize shortcut does not work."
             a.addButton(withTitle: "OK")
             present(a)
         }
     }
 
-    private func checkUpdates(manual: Bool) {
-        Updater.check { [weak self] info in
-            guard let self = self else { return }
-            if let info = info {
-                self.pendingUpdate = info
-                self.rebuildMenu()
-                if manual {
-                    let a = NSAlert()
-                    a.messageText = "Update available: v\(info.latest)"
-                    a.informativeText = (info.notes.isEmpty ? "" : info.notes + "\n\n") + "You have v\(Updater.current). Open the download page?"
-                    a.addButton(withTitle: "Open download page")
-                    a.addButton(withTitle: "Later")
-                    if self.present(a) == .alertFirstButtonReturn, let u = URL(string: info.url) {
-                        NSWorkspace.shared.open(u)
-                    }
-                }
-            } else if manual {
-                let a = NSAlert()
-                a.messageText = "You are up to date"
-                a.informativeText = "Version \(Updater.current) is the newest Mac version."
-                a.addButton(withTitle: "OK")
-                self.present(a)
+    func handleHotKey(id: UInt32, pressed: Bool) {
+        guard let a = HotAction.allCases.first(where: { $0.id == id }) else { return }
+        switch a {
+        case .peek:
+            if pressed { peekPressed() } else { peekReleased() }
+        case .toggle:
+            if pressed { toggle() }
+        case .size:
+            if pressed { cycleSize() }
+        case .opacity:
+            if pressed { cycleOpacity() }
+        case .notes:
+            if pressed { notesHotkey() }
+        case .live:
+            if pressed { setLiveMini(!settings.liveMini) }
+        case .drag:
+            if pressed { toggleLiveDrag() }
+        case .timer1:
+            if pressed { clock.pressTimer(0); refreshUI() }
+        case .timer2:
+            if pressed { clock.pressTimer(1); refreshUI() }
+        case .stopwatch:
+            if pressed { clock.pressStopwatch(); refreshUI() }
+        }
+    }
+
+    // HOLD-to-peek: the shortcut opens the tablet; letting go of it minimizes again.
+    func peekPressed() {
+        if state == .open || animating { return }
+        peekActive = true
+        pendingPeekClose = false
+        expand()
+    }
+
+    func peekReleased() {
+        if !peekActive { return }
+        peekActive = false
+        if animating { pendingPeekClose = true } else if state == .open { minimize() }
+    }
+
+    func notesHotkey() {
+        if state != .open && !animating {
+            notesVisible = true
+            toolsVisible = false
+            focusNotesOnOpen = true
+            expand()
+        } else {
+            setNotes(!notesVisible)
+        }
+    }
+
+    // ---------------------------------------------------------------- timers
+    func timerAlert(_ i: Int) {
+        if settings.alertBeep { playAlarm() }
+        showToast("TIMER \(i + 1) (" + Clockwork.fmtPreset(clock.timers[i].preset) + ") is up")
+        refreshUI()
+    }
+
+    func playAlarm() {
+        for n in 0..<3 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(n) * 0.4) {
+                if let s = NSSound(named: NSSound.Name("Ping")) { s.stop(); s.play() } else { NSSound.beep() }
             }
         }
     }
 
-    // ---------------------------------------------------------------- web
-    private func applyAdBlock(then: (() -> Void)?) {
+    func showToast(_ text: String) {
+        toastText = text
+        tablet.hud.toast = text
+        tablet.hud.needsDisplay = true
+        if let b = statusItem?.button { b.title = " " + text }
+        toastTimer?.invalidate()
+        toastTimer = Timer.scheduledTimer(withTimeInterval: 2.2, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            self.toastText = nil
+            self.tablet.hud.toast = nil
+            self.tablet.hud.needsDisplay = true
+            self.statusItem?.button?.title = ""
+        }
+        if testing { Log.write("toast: " + text) }
+    }
+
+    // ---------------------------------------------------------------- what is shown on the tablet
+    func keyText(_ id: String) -> (String, Int) {
+        switch id {
+        case "NONE": return ("", 0)
+        case "MAP": return ("MAP", 0)
+        case "PAGE": return ("PAGE \(softPage + 1)/3", 0)
+        case "PG1", "PG2", "PG3":
+            let n = Int(String(id.suffix(1))) ?? 1
+            return ("PAGE \(n)", softPage == n - 1 ? 1 : 0)
+        case "BM1", "BM2", "BM3", "BM4", "BM5", "BM6":
+            let n = Int(String(id.suffix(1))) ?? 1
+            let nm = bookmarkName(n - 1)
+            return nm.isEmpty ? ("BM\(n) -", 2) : (nm, 0)
+        case "LOG": return ("LOG +", 0)
+        case "LOGV": return ("COPY LOG", 0)
+        case "CALC": return ("BRG/DIST", toolsVisible && toolsTab == 0 ? 1 : 0)
+        case "N9L": return ("9-LINE", toolsVisible && toolsTab == 1 ? 1 : 0)
+        case "CHK": return ("CHECKLIST", toolsVisible && toolsTab == 2 ? 1 : 0)
+        case "PR1", "PR2", "PR3":
+            let n = Int(String(id.suffix(1))) ?? 1
+            return ("PRESET \(n)", settings.preset(n - 1).isEmpty ? 2 : 0)
+        case "SET": return ("SETTINGS", 0)
+        case "UPD": return ("UPDATE", 0)
+        case "CLRD": return ("CLEAR DATA", 0)
+        case "ZM+": return ("ZOOM +", 0)
+        case "ZM-": return ("ZOOM -", 0)
+        case "SZ+": return ("SIZE +", 0)
+        case "SZ-": return ("SIZE -", 0)
+        case "DRAG": return ("MOVE LIVE", liveDrag ? 1 : 0)
+        case "WEB": return ("WEB", tablet.barVisible ? 1 : 0)
+        case "NOTE": return ("NOTE", notesVisible ? 1 : 0)
+        case "TIME": return ("TIME", settings.showPanel ? 1 : 0)
+        case "LIVE": return (settings.liveMini ? "LIVE ON" : "LIVE OFF", settings.liveMini ? 1 : 0)
+        case "TM1", "TM2", "TM3", "TM4":
+            let i = (Int(String(id.suffix(1))) ?? 1) - 1
+            let t = clock.timers[i]
+            if t.done { return ("TMR\(i + 1) DONE", 3) }
+            if t.running { return ("TMR\(i + 1) " + Clockwork.fmt(t.endMs - clock.nowMs + 999), 1) }
+            return ("TMR\(i + 1) " + Clockwork.fmtPreset(t.preset), 0)
+        case "STW":
+            if !clock.stwUsed { return ("STOPWATCH", 0) }
+            return ("STW " + Clockwork.fmt(clock.stwMs), clock.stwRunning ? 1 : 2)
+        case "BACK": return ("BACK", web.canGoBack ? 0 : 2)
+        case "FWD": return ("FWD", web.canGoForward ? 0 : 2)
+        case "RFSH": return ("REFRESH", 0)
+        case "ADS": return (settings.adBlock ? "ADS ON" : "ADS OFF", settings.adBlock ? 1 : 2)
+        case "XPAR": return ("XPAR \(settings.opacity)", 0)
+        case "LOCK": return (settings.lockMouse ? "LOCK" : "FREE", settings.lockMouse ? 1 : 2)
+        case "MSN":
+            if !clock.msnUsed { return ("MSN CLK", 0) }
+            return ("MSN " + Clockwork.fmt(clock.msnMs), clock.msnRunning ? 1 : 2)
+        case "MRST": return ("MSN RST", 0)
+        case "UTC": return (settings.zulu ? "ZULU" : "LOCAL", 0)
+        case "CPY": return ("COPY URL", 0)
+        case "SHOT": return ("SCREENSHOT", 0)
+        case "ZRST": return ("ZOOM " + String(Int((1050.0 * 100.0 / Double(max(1, settings.pageWidth))).rounded())), 0)
+        default: return (id, 0)
+        }
+    }
+
+    func bookmarkName(_ i: Int) -> String {
+        let b = settings.bookmark(i)
+        if b.isEmpty { return "" }
+        var n = b
+        if let bar = b.firstIndex(of: "|") { n = String(b[b.startIndex..<bar]) }
+        n = n.trimmingCharacters(in: .whitespaces)
+        return n.count > 11 ? String(n.prefix(11)) : n
+    }
+
+    // the action behind a soft-key slot on the page that is showing
+    func actionAt(slot: String) -> String {
+        guard let idx = PilotActions.slotNames.firstIndex(of: slot) else { return "NONE" }
+        let pg = settings.page(softPage)
+        return idx < pg.count && !pg[idx].isEmpty ? pg[idx] : "NONE"
+    }
+
+    func hudLabelCount() -> Int { return tablet.hud.labels.count }
+
+    func refreshUI() {
+        guard tablet != nil else { return }
+        if tablet.layoutDef.id != layoutDef.id { tablet.layoutDef = layoutDef }
+        tablet.statusKey = HotKeyText.describe(settings.hotkey(.toggle))
+        tablet.statusInfo = clock.dockInfo() ?? clock.clockText(seconds: false)
+        tablet.lockMouse = settings.lockMouse && hotKeyWorks
+        tablet.alert = clock.anyAlert && clock.flashOn
+        tablet.liveOn = settings.liveMini
+        tablet.notesOn = notesVisible || toolsVisible
+        tablet.timerLit = clock.anyRunning
+        tablet.needsDisplay = true
+        let hud = tablet.hud
+        hud.clock = clock
+        hud.showPanel = settings.showPanel
+        hud.showLabels = settings.showLabels
+        if layoutDef.isPilot {
+            hud.labels = layoutDef.softKeys.map { k -> HUDLabel in
+                let t = keyText(actionAt(slot: k.id))
+                return HUDLabel(id: k.id, text: t.0, state: t.1)
+            }
+        } else {
+            hud.labels = []
+        }
+        hud.needsDisplay = true
+    }
+
+    // a few times a second: look at the timers and redraw only when something on screen would look different
+    func infoTick() {
+        clock.tick()
+        var sig = "\(state)\(animating)\(clock.anyAlert && clock.flashOn)"
+        switch state {
+        case .open:
+            if settings.showPanel { sig += clock.panelLines().map { $0.text }.joined(separator: "|") }
+            if layoutDef.isPilot && settings.showLabels {
+                for k in layoutDef.softKeys { let t = keyText(actionAt(slot: k.id)); sig += t.0 + "\(t.1)|" }
+            }
+        case .docked:
+            sig += (clock.dockInfo() ?? "") + clock.clockText(seconds: false)
+        case .live:
+            sig += clock.anyAlert ? "A" : ""
+        }
+        sig += (toastText ?? "")
+        if sig == lastSig { return }
+        lastSig = sig
+        refreshUI()
+    }
+
+    // ---------------------------------------------------------------- the page
+    func homeHost() -> String {
+        var s = settings.homeURL.trimmingCharacters(in: .whitespaces)
+        if !s.contains("://") { s = "https://" + s }
+        return URL(string: s)?.host?.lowercased() ?? ""
+    }
+
+    // the sharpness the map site is told it has: the real value of the open tablet, between 1 and 2
+    func mapPixelRatio() -> Double {
+        if settings.mapPixelRatio >= 0.5 { return max(0.5, min(3.0, settings.mapPixelRatio)) }
+        let L = layoutDef
+        let screen = window?.screen ?? currentScreen()
+        let openW = openFrame(on: screen).width
+        let holePts = L.screen.width * openW / L.logical.width
+        let eff = holePts * screen.backingScaleFactor / CGFloat(max(300, settings.pageWidth))
+        return Double(max(1.0, min(2.0, eff)))
+    }
+
+    func buildHomeScript() -> String? {
+        let host = homeHost()
+        if host.isEmpty { return nil }
+        let L = layoutDef
+        let live = (state == .live)
+        let vw = settings.pageWidth
+        var vh = Int(CGFloat(vw) * L.screen.height / L.screen.width)
+        if live, let w = window, w.frame.width > 0 { vh = Int(CGFloat(vw) * w.frame.height / w.frame.width) }
+        return PageScript.home(host: host, tag: L.pageTag, aspect: Double(L.screen.width / L.screen.height),
+                               mode: live ? "mini" : "full", vw: vw, vh: vh, dpr: mapPixelRatio())
+    }
+
+    // scripts that run in every new page
+    func registerScripts() {
+        let ucc = web.configuration.userContentController
+        ucc.removeAllUserScripts()
+        if let hs = buildHomeScript() {
+            ucc.addUserScript(WKUserScript(source: hs, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
+        if settings.adBlock {
+            ucc.addUserScript(WKUserScript(source: PageScript.youTube, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        }
+    }
+
+    // the mode / layout changed: tell the page that is already open (your map site only)
+    func notifyPage() {
+        registerScripts()
+        if let hs = buildHomeScript() {
+            web.evaluateJavaScript(hs + ";window.dispatchEvent(new Event('resize'));", completionHandler: nil)
+        }
+    }
+
+    func applyAdBlock(then: (() -> Void)?) {
         let ucc = web.configuration.userContentController
         if let l = ruleList {
             ucc.remove(l)
@@ -583,28 +962,24 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         }
     }
 
-    private func loadHome() {
+    func loadHome() {
+        registerScripts()      // the map site's address may have changed: the scripts must match it
         if let u = WebSupport.resolveInput(settings.homeURL, search: settings.searchURL) {
             web.load(URLRequest(url: u))
         }
     }
 
-    private func go(_ text: String) {
+    func go(_ text: String) {
         if let u = WebSupport.resolveInput(text, search: settings.searchURL) {
             web.load(URLRequest(url: u))
-            window.makeFirstResponder(web)
+            focusPage()
         } else {
             NSSound.beep()
         }
     }
 
-    private func toggleBar() {
-        tablet.barVisible = !tablet.barVisible
-        if tablet.barVisible {
-            window.makeFirstResponder(tablet.bar.field)
-        } else {
-            window.makeFirstResponder(web)
-        }
+    func focusPage() {
+        if state == .open && !animating { window.makeFirstResponder(web) }
     }
 
     // ---- navigation rules (the "secure browser" part)
@@ -654,6 +1029,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         if let u = webView.url, let s = u.scheme, s != "about" {
             tablet.bar.field.stringValue = u.absoluteString
         }
+        refreshUI()
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        refreshUI()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -664,7 +1044,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         showError(error)
     }
 
-    private func showError(_ error: Error) {
+    func showError(_ error: Error) {
         let ns = error as NSError
         if ns.code == NSURLErrorCancelled { return }
         var text = ns.localizedDescription
@@ -686,5 +1066,47 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     // the page may not use the camera or microphone
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
         decisionHandler(.deny)
+    }
+
+    // ---- the page's own message boxes (alert / confirm / prompt) and file chooser
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        let a = NSAlert()
+        a.messageText = "Message from the page"
+        a.informativeText = message
+        a.addButton(withTitle: "OK")
+        present(a)
+        completionHandler()
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        let a = NSAlert()
+        a.messageText = "The page asks"
+        a.informativeText = message
+        a.addButton(withTitle: "OK")
+        a.addButton(withTitle: "Cancel")
+        completionHandler(present(a) == .alertFirstButtonReturn)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        let a = NSAlert()
+        a.messageText = "The page asks"
+        a.informativeText = prompt
+        a.addButton(withTitle: "OK")
+        a.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = defaultText ?? ""
+        a.accessoryView = field
+        completionHandler(present(a) == .alertFirstButtonReturn ? field.stringValue : nil)
+    }
+
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        NSApp.activate(ignoringOtherApps: true)
+        panel.beginSheetModal(for: window) { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
     }
 }
