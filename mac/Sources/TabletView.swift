@@ -80,7 +80,7 @@ final class BarView: NSView {
 
 final class TabletView: NSView {
     static let logical = CGSize(width: 774, height: 396)
-    static let screenRect = CGRect(x: 126, y: 69, width: 522, height: 250)
+    static let screenRect = CGRect(x: 126, y: 73, width: 522, height: 250)
     static let holeRadius: CGFloat = 13
     static let gearPoint = CGPoint(x: 692, y: 50)
     static let globePoint = CGPoint(x: 661, y: 50)
@@ -174,12 +174,11 @@ final class TabletView: NSView {
         let hy = hole.minY * s
         let hw = hole.width * s
         let hh = hole.height * s
-        var barH: CGFloat = 0
+        web.frame = NSRect(x: hx, y: hy, width: hw, height: hh)
         if barVisible && contentVisible {
-            barH = max(24.0, 15.0 * s)
+            let barH = max(24.0, 15.0 * s)
             bar.frame = NSRect(x: hx, y: hy, width: hw, height: barH)
         }
-        web.frame = NSRect(x: hx, y: hy + barH, width: hw, height: hh - barH)
         if let layer = web.layer {
             layer.cornerRadius = 10.0 * s
             layer.masksToBounds = true

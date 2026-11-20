@@ -8,6 +8,7 @@
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>Tac Map Overlay</string>
     <key>CFBundleDisplayName</key><string>Tac Map Overlay</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>__VERSION__</string>
     <key>CFBundleVersion</key><string>__VERSION__</string>
