@@ -1,7 +1,8 @@
 TAC MAP OVERLAY FOR MAC (A-TAK)  -  Apple Silicon, macOS 12+
 
 INSTALL
-1. Unzip the download and drag "Tac Map Overlay" into your Applications folder.
+1. Open "mac/build/Tac Map Overlay.app" directly from a downloaded/checked-out copy of this repository,
+   or unzip the mac ZIP and drag "Tac Map Overlay" into your Applications folder.
 2. The FIRST time: right-click the app -> Open -> Open.
    (macOS warns because the app is not notarized by Apple - that costs $99/year and this project is free.
     Everything is open source: the code is in the "mac" folder of the repository.)

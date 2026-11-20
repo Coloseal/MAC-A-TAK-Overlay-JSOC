@@ -206,11 +206,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     private func buildStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            if let img = NSImage(systemSymbolName: "map", accessibilityDescription: "Tac Map Overlay") {
-                img.isTemplate = true
+            if let url = Bundle.main.resourceURL?.appendingPathComponent("AppIcon.png"),
+               let img = NSImage(contentsOf: url) {
+                img.size = NSSize(width: 18, height: 18)
+                img.isTemplate = false
                 button.image = img
             } else {
-                button.title = "TAK"
+                if let img = NSImage(systemSymbolName: "map", accessibilityDescription: "Tac Map Overlay") {
+                    img.isTemplate = true
+                    button.image = img
+                } else {
+                    button.title = "TAK"
+                }
             }
         }
         statusItem = item

@@ -9,7 +9,11 @@ on:
         default: false
   push:
     paths:
-      - "mac/**"
+      - "mac/Sources/**"
+      - "mac/Resources/**"
+      - "mac/build.sh"
+      - "mac/Info.plist.template"
+      - "mac/VERSION"
       - ".github/workflows/build-mac.yml"
 
 permissions:
@@ -65,11 +69,26 @@ jobs:
         with:
           name: TacMapOverlay-mac
           path: |
+            mac/build/Tac Map Overlay.app
             mac/build/*.zip
             mac/build/*.sha256
             smoke-screen.png
             build.log
           if-no-files-found: warn
+
+      - name: Commit runnable app bundle to repository
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "mac/build/Tac Map Overlay.app" mac/build/*.zip mac/build/*.sha256
+          if git diff --cached --quiet; then
+            echo "No built app changes"
+            exit 0
+          fi
+          git diff --cached --stat
+          git commit -m "Update runnable macOS app [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Publish release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
