@@ -101,7 +101,7 @@ final class SelfTest {
         guard let cv = app.window.contentView as? TabletView else { return }
         var webImage: NSImage?
         if !app.web.isHidden { webImage = await webSnapshot() }
-        var overlays: [NSView] = [cv.bar, cv.hud]
+        var overlays: [NSView] = [cv.bar, cv.hud, cv.dragCatcher]
         if let sp = cv.sidePanel { overlays.append(sp) }
         let hiddenBefore = overlays.map { $0.isHidden }
         let webHiddenBefore = app.web.isHidden

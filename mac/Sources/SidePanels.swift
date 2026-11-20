@@ -629,32 +629,37 @@ final class ToolsPanel: SidePanelBase, NSTextFieldDelegate {
         let cw = max(40, bounds.width - 2 * p)
         let fh = max(22, (boxFontSize * 1.9).rounded())
         for l in [lFrom, lTo, lHelp] { l.font = labFont }
-        for f in [tFrom, tTo, tRes] { f.font = boxFont }
+        let resFont = max(10, boxFontSize * 0.85)
+        for f in [tFrom, tTo] { f.font = boxFont }
+        tRes.font = PanelStyle.regular(resFont)
 
         // bearing / distance
         lFrom.frame = NSRect(x: p, y: top, width: cw, height: fs * 1.5)
         tFrom.frame = NSRect(x: p, y: lFrom.frame.maxY + 2, width: cw, height: fh)
         lTo.frame = NSRect(x: p, y: tFrom.frame.maxY + p * 2, width: cw, height: fs * 1.5)
         tTo.frame = NSRect(x: p, y: lTo.frame.maxY + 2, width: cw, height: fh)
-        tRes.frame = NSRect(x: p, y: tTo.frame.maxY + p * 2, width: cw, height: boxFontSize * 4.9)
+        tRes.frame = NSRect(x: p, y: tTo.frame.maxY + p * 2, width: cw, height: resFont * 1.5 * 4 + 8)
         bCopyRes.frame = NSRect(x: p, y: tRes.frame.maxY + p, width: fs * 4.4 + 16, height: bs)
         bCopyRes.setLabel("COPY", size: fs)
         lHelp.frame = NSRect(x: p, y: bCopyRes.frame.maxY + p * 2, width: cw, height: max(20, bounds.height - bCopyRes.frame.maxY - p * 3))
 
         // 9-line
         let lw = cw * 0.36
-        let rh = max(fh + 2, (bounds.height - top - bs - p * 3) / 10)
+        let rh = max(16, (bounds.height - top - p) / 11)          // ten lines and the button row always fit
+        let nineFont = PanelStyle.regular(min(boxFontSize, max(9, (rh - 4) * 0.62)))
+        let nineLab = PanelStyle.bold(min(max(9, fs * 0.9), max(8, (rh - 4) * 0.6)))
         for i in 0..<10 {
             let y = top + CGFloat(i) * rh
-            nl[i].font = labFont
-            nl[i].frame = NSRect(x: p, y: y + 2, width: lw, height: rh - 2)
-            nt[i].font = boxFont
-            nt[i].frame = NSRect(x: p + lw, y: y, width: cw - lw, height: fh)
+            nl[i].font = nineLab
+            nl[i].frame = NSRect(x: p, y: y + 1, width: lw, height: rh - 2)
+            nt[i].font = nineFont
+            nt[i].frame = NSRect(x: p + lw, y: y, width: cw - lw, height: rh - 2)
         }
         let by = top + 10 * rh + p
-        bCopyNine.frame = NSRect(x: p, y: by, width: fs * 7.5 + 16, height: bs)
+        let nineBtn = min(bs, max(16, rh - 2))
+        bCopyNine.frame = NSRect(x: p, y: by, width: fs * 7.5 + 16, height: nineBtn)
         bCopyNine.setLabel("COPY 9-LINE", size: fs)
-        bClearNine.frame = NSRect(x: bCopyNine.frame.maxX + p, y: by, width: fs * 3.6 + 16, height: bs)
+        bClearNine.frame = NSRect(x: bCopyNine.frame.maxX + p, y: by, width: fs * 3.6 + 16, height: nineBtn)
         bClearNine.setLabel(clearArmed ? "SURE?" : "CLEAR", size: fs)
 
         // checklist
@@ -665,8 +670,12 @@ final class ToolsPanel: SidePanelBase, NSTextFieldDelegate {
         editBox.font = boxFont
         let itemH = max(20, (boxFontSize * 1.7).rounded())
         listDoc.frame = NSRect(x: 0, y: 0, width: listFrame.width, height: max(listFrame.height, CGFloat(checks.count) * itemH + 6))
+        let checkFont = PanelStyle.regular(max(9, min(12, boxFontSize * 0.85)))
         for (i, c) in checks.enumerated() {
             c.frame = NSRect(x: 6, y: 3 + CGFloat(i) * itemH, width: listFrame.width - 12, height: itemH)
+            if i < items.count {
+                c.attributedTitle = NSAttributedString(string: items[i], attributes: [.foregroundColor: PanelStyle.fg, .font: checkFont])
+            }
         }
         bEdit.frame = NSRect(x: p, y: cb + p, width: fs * 6.2 + 16, height: bs)
         bEdit.setLabel(editing ? "SAVE LIST" : "EDIT LIST", size: fs)

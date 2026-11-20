@@ -127,8 +127,13 @@ final class HUDView: NSView {
         let font = NSFont.monospacedSystemFont(ofSize: fs, weight: .bold)
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: uiGreen]
         let sz = (t as NSString).size(withAttributes: attrs)
-        let w = min(bounds.width - 16, sz.width + 24)
-        let pill = CGRect(x: (bounds.width - w) / 2, y: bounds.height - sz.height - 28, width: w, height: sz.height + 10)
+        let sc = bounds.width / layoutDef.logical.width
+        let s = layoutDef.screen
+        let centreX = live ? bounds.width / 2 : s.midX * sc
+        let bottom = live ? bounds.height - 18 : s.maxY * sc - 10
+        let room = live ? bounds.width - 16 : s.width * sc - 16
+        let w = min(room, sz.width + 24)
+        let pill = CGRect(x: centreX - w / 2, y: bottom - sz.height - 10, width: w, height: sz.height + 10)
         ctx.setFillColor(NSColor(srgbRed: 10 / 255.0, green: 12 / 255.0, blue: 8 / 255.0, alpha: 220 / 255.0).cgColor)
         ctx.addPath(ArtPainter.rounded(pill, 8))
         ctx.fillPath()
@@ -408,6 +413,12 @@ final class TabletView: NSView {
         let L = layoutDef
         ctx.saveGState()
         ctx.scaleBy(x: s, y: s)
+
+        // a dark backing behind the picture: where the picture's own opening is bigger than the page, dark glass shows
+        // instead of the game
+        ctx.setFillColor(NSColor(srgbRed: 0.04, green: 0.045, blue: 0.04, alpha: 1).cgColor)
+        ctx.addPath(ArtPainter.rounded(L.screen.insetBy(dx: -40, dy: -16), L.holeRadius + 10))
+        ctx.fillPath()
 
         if let img = skin {
             img.draw(in: NSRect(x: 0, y: 0, width: L.logical.width, height: L.logical.height),
