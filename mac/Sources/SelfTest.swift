@@ -169,6 +169,10 @@ final class SelfTest {
         let want = app.openFrame(on: app.window.screen ?? NSScreen.screens[0])
         check("opens to the set size", app.state == .open && abs(app.window.frame.width - want.width) < 2, "width=\(app.window.frame.width) wanted=\(want.width)")
         await pause(0.6)
+        if app.tablet.skin != nil {
+            let o = app.tablet.opening
+            check("the picture's screen opening is found and the page fills it", o != nil && (o?.rect.width ?? 0) > 450, "\(String(describing: o?.rect))")
+        }
         await shot("02-open-atak")
 
         // ---- colour themes recolour the tablet picture (like on Windows)

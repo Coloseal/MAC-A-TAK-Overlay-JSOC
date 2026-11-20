@@ -89,6 +89,7 @@ struct HUDLabel {
 
 final class HUDView: NSView {
     var layoutDef: Layout = .atak
+    var screenRect: CGRect?            // where the page is (logical units); nil = the layout's own screen
     var clock: Clockwork?
     var showLabels = true
     var showPanel = true
@@ -128,7 +129,7 @@ final class HUDView: NSView {
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: uiGreen]
         let sz = (t as NSString).size(withAttributes: attrs)
         let sc = bounds.width / layoutDef.logical.width
-        let s = layoutDef.screen
+        let s = screenRect ?? layoutDef.screen
         let centreX = live ? bounds.width / 2 : s.midX * sc
         let bottom = live ? bounds.height - 18 : s.maxY * sc - 10
         let room = live ? bounds.width - 16 : s.width * sc - 16
@@ -155,7 +156,7 @@ final class HUDView: NSView {
             return
         }
         let sc = bounds.width / layoutDef.logical.width
-        let s = layoutDef.screen
+        let s = screenRect ?? layoutDef.screen
         let fpx = max(9.0, 8.6 * sc)
         let font = NSFont.monospacedSystemFont(ofSize: fpx, weight: .bold)
 
@@ -279,7 +280,13 @@ final class DragCatcherView: NSView {
 final class TabletView: NSView {
     enum Mode { case art, live }
 
-    var layoutDef: Layout = .atak { didSet { hud.layoutDef = layoutDef; needsLayout = true; needsDisplay = true } }
+    var layoutDef: Layout = .atak { didSet { hud.layoutDef = layoutDef; hud.screenRect = screenRect; needsLayout = true; needsDisplay = true } }
+    // the see-through opening found in the picture (the page fills it exactly); nil = the layout's own screen rectangle
+    var opening: OpeningShape? { didSet { hud.screenRect = screenRect; needsLayout = true; needsDisplay = true } }
+    var screenRect: CGRect { return opening?.rect ?? layoutDef.screen }
+    private let webMask = CAShapeLayer()
+    private let barMask = CAShapeLayer()
+    private let panelMask = CAShapeLayer()
     var theme: Theme = Themes.all[0] { didSet { needsDisplay = true } }
     var skin: NSImage? { didSet { needsDisplay = true } }
     var mode: Mode = .art { didSet { updateVisibility(); needsLayout = true; needsDisplay = true; hud.live = (mode == .live); hud.needsDisplay = true } }
@@ -371,6 +378,7 @@ final class TabletView: NSView {
         dragCatcher.frame = bounds
         if mode == .live {
             web.frame = bounds
+            web.layer?.mask = nil
             web.layer?.cornerRadius = 14
             web.layer?.masksToBounds = true
             hud.panelRightLimit = nil
@@ -379,7 +387,7 @@ final class TabletView: NSView {
             return
         }
         let s = scale
-        let hole = layoutDef.screen
+        let hole = screenRect
         let hx = hole.minX * s, hy = hole.minY * s, hw = hole.width * s, hh = hole.height * s
         var barH: CGFloat = 0
         if barVisible && contentVisible {
@@ -393,11 +401,34 @@ final class TabletView: NSView {
             p.frame = NSRect(x: hx + hw - pw, y: hy + barH, width: pw, height: hh - barH)
         }
         web.frame = NSRect(x: hx, y: hy, width: hw - pw, height: hh)      // the page keeps its place; the address bar lies on top of it
-        web.layer?.cornerRadius = layoutDef.holeRadius * s * 0.8
-        web.layer?.masksToBounds = true
+        if let o = opening {
+            // the page (and the bar / side panel on top of it) fill the picture's opening and are cut to its exact shape
+            fit(web, to: o, mask: webMask, scale: s)
+            web.layer?.cornerRadius = 0
+            web.layer?.masksToBounds = false
+            if barH > 0 { fit(bar, to: o, mask: barMask, scale: s) }
+            if pw > 0, let p = sidePanel { fit(p, to: o, mask: panelMask, scale: s) }
+        } else {
+            web.layer?.mask = nil
+            bar.layer?.mask = nil
+            sidePanel?.layer?.mask = nil
+            web.layer?.cornerRadius = layoutDef.holeRadius * s * 0.8
+            web.layer?.masksToBounds = true
+        }
         if contentVisible { setZoom(max(0.25, min(3.0, hw / CGFloat(max(500, pageWidthCSS))))) }
         hud.panelRightLimit = pw > 0 ? hx + hw - pw : nil
         hud.panelMinTop = barH > 0 ? hy + barH + 4 * s : nil
+    }
+
+    // cut a view that lies inside the opening to the opening's shape
+    private func fit(_ v: NSView, to o: OpeningShape, mask: CAShapeLayer, scale s: CGFloat) {
+        v.wantsLayer = true
+        guard let layer = v.layer else { return }
+        let origin = CGPoint(x: v.frame.minX - o.rect.minX * s, y: v.frame.minY - o.rect.minY * s)
+        mask.frame = v.bounds
+        mask.path = o.maskPath(scale: s, offset: origin, flipped: layer.isGeometryFlipped, height: v.bounds.height)
+        mask.fillColor = NSColor.black.cgColor
+        layer.mask = mask
     }
 
     private func setZoom(_ z: CGFloat) {
@@ -414,11 +445,6 @@ final class TabletView: NSView {
         ctx.saveGState()
         ctx.scaleBy(x: s, y: s)
 
-        // a dark backing behind the picture: where the picture's own opening is bigger than the page, dark glass shows
-        // instead of the game
-        ctx.setFillColor(NSColor(srgbRed: 0.04, green: 0.045, blue: 0.04, alpha: 1).cgColor)
-        ctx.addPath(ArtPainter.rounded(L.screen.insetBy(dx: -40, dy: -16), L.holeRadius + 10))
-        ctx.fillPath()
 
         if let img = skin {
             img.draw(in: NSRect(x: 0, y: 0, width: L.logical.width, height: L.logical.height),
@@ -430,17 +456,20 @@ final class TabletView: NSView {
         }
 
         // the see-through screen
-        let hole = ArtPainter.rounded(L.screen, L.holeRadius)
-        ctx.setBlendMode(.clear)
-        ctx.addPath(hole)
-        ctx.fillPath()
-        ctx.setBlendMode(.normal)
+        let hole: CGPath = opening?.logicalPath() ?? ArtPainter.rounded(L.screen, L.holeRadius)
+        if opening == nil {
+            // no opening in the picture itself: cut the screen out of it
+            ctx.setBlendMode(.clear)
+            ctx.addPath(hole)
+            ctx.fillPath()
+            ctx.setBlendMode(.normal)
+        }
         if !contentVisible {
             // minimized / moving: dark glass instead of the live page, with the name and the shortcut
             ctx.setFillColor(NSColor(srgbRed: 8 / 255.0, green: 10 / 255.0, blue: 8 / 255.0, alpha: 0.96).cgColor)
             ctx.addPath(hole)
             ctx.fillPath()
-            let c = CGPoint(x: L.screen.midX, y: L.screen.midY)
+            let c = CGPoint(x: screenRect.midX, y: screenRect.midY)
             let big = max(14.0, 12.0 / s)
             ArtPainter.text("TAC MAP", at: CGPoint(x: c.x, y: c.y - big * 0.7), size: big, color: uiGreen)
             let small = max(9.0, 9.5 / s)

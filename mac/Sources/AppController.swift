@@ -399,16 +399,20 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     }
 
     func loadSkin() {
+        let L = layoutDef
         if let p = settings.skinPath(for: settings.layout), let img = AppController.readSkin(p) {
             tablet.skin = img
+            tablet.opening = OpeningDetector.detect(img, logical: L.logical, key: p)
             return
         }
         // the supplied tablet case picture is the default look of the ATAK tablet
         if settings.layout == "atak", let url = Bundle.main.resourceURL?.appendingPathComponent("default-tablet.png"),
            let img = AppController.readSkin(url.path) {
             tablet.skin = PhotoTheme.themed(img, name: currentTheme.name, screen: Layout.atak.screen, logical: Layout.atak.logical)
+            tablet.opening = OpeningDetector.detect(img, logical: L.logical, key: url.path)
         } else {
             tablet.skin = nil
+            tablet.opening = nil
         }
     }
 
@@ -910,7 +914,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         let L = layoutDef
         let screen = window?.screen ?? currentScreen()
         let openW = openFrame(on: screen).width
-        let holePts = L.screen.width * openW / L.logical.width
+        let holePts = tablet.screenRect.width * openW / L.logical.width
         let eff = holePts * screen.backingScaleFactor / CGFloat(max(300, settings.pageWidth))
         return Double(max(1.0, min(2.0, eff)))
     }
@@ -921,9 +925,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         let L = layoutDef
         let live = (state == .live)
         let vw = settings.pageWidth
-        var vh = Int(CGFloat(vw) * L.screen.height / L.screen.width)
+        let sr = tablet.screenRect
+        var vh = Int(CGFloat(vw) * sr.height / sr.width)
         if live, let w = window, w.frame.width > 0 { vh = Int(CGFloat(vw) * w.frame.height / w.frame.width) }
-        return PageScript.home(host: host, tag: L.pageTag, aspect: Double(L.screen.width / L.screen.height),
+        return PageScript.home(host: host, tag: L.pageTag, aspect: Double(sr.width / sr.height),
                                mode: live ? "mini" : "full", vw: vw, vh: vh, dpr: mapPixelRatio())
     }
 
