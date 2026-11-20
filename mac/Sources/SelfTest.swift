@@ -159,6 +159,26 @@ final class SelfTest {
         await pause(0.6)
         await shot("02-open-atak")
 
+        // ---- colour themes recolour the tablet picture (like on Windows)
+        let skinBefore = app.tablet.skin
+        let theme0 = s.theme
+        s.theme = "JG Camo"
+        app.applyAll()
+        await pause(1.0)
+        await shot("02b-open-atak-camo")
+        s.theme = "Black"
+        app.applyAll()
+        await pause(1.0)
+        await shot("02c-open-atak-black")
+        if skinBefore != nil {
+            check("a theme recolours the tablet picture", app.tablet.skin != nil && app.tablet.skin !== skinBefore)
+        } else {
+            note("NOTE  no tablet picture in the app, the drawn art is used")
+        }
+        s.theme = theme0
+        app.applyAll()
+        await pause(0.6)
+
         app.press("WEB")
         await pause(0.6)
         check("address bar shows", app.tablet.barVisible)
@@ -344,7 +364,8 @@ final class SelfTest {
         app.setNotes(false)
         app.minimize()
         await pause(1.2)
-        app.showToast("self-test")`n        check("toast works", app.toastText == "self-test")
+        app.showToast("self-test")
+        check("toast works", app.toastText == "self-test")
 
         note("RESULT  passed=\(passed)  failed=\(failed)")
         note("DONE")

@@ -241,7 +241,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     func buildStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            if let img = NSImage(systemSymbolName: "map", accessibilityDescription: "Tac Map Overlay") {
+            if let url = Bundle.main.resourceURL?.appendingPathComponent("AppIcon.png"), let img = NSImage(contentsOf: url) {
+                img.size = NSSize(width: 18, height: 18)
+                img.isTemplate = false
+                button.image = img
+            } else if let img = NSImage(systemSymbolName: "map", accessibilityDescription: "Tac Map Overlay") {
                 img.isTemplate = true
                 button.image = img
             } else {
@@ -397,6 +401,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     func loadSkin() {
         if let p = settings.skinPath(for: settings.layout), let img = AppController.readSkin(p) {
             tablet.skin = img
+            return
+        }
+        // the supplied tablet case picture is the default look of the ATAK tablet
+        if settings.layout == "atak", let url = Bundle.main.resourceURL?.appendingPathComponent("default-tablet.png"),
+           let img = AppController.readSkin(url.path) {
+            tablet.skin = PhotoTheme.themed(img, name: currentTheme.name, screen: Layout.atak.screen, logical: Layout.atak.logical)
         } else {
             tablet.skin = nil
         }

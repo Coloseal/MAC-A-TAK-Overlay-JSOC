@@ -387,7 +387,7 @@ final class TabletView: NSView {
             if let sp = p as? SidePanelBase { sp.uiScale = s }
             p.frame = NSRect(x: hx + hw - pw, y: hy + barH, width: pw, height: hh - barH)
         }
-        web.frame = NSRect(x: hx, y: hy + barH, width: hw - pw, height: hh - barH)
+        web.frame = NSRect(x: hx, y: hy, width: hw - pw, height: hh)      // the page keeps its place; the address bar lies on top of it
         web.layer?.cornerRadius = layoutDef.holeRadius * s * 0.8
         web.layer?.masksToBounds = true
         if contentVisible { setZoom(max(0.25, min(3.0, hw / CGFloat(max(500, pageWidthCSS))))) }

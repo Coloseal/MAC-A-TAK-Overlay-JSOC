@@ -31,10 +31,9 @@ enum Themes {
         return all[0]
     }
 
+    // dark themes get light text on the frame
     static func isDark(_ t: Theme) -> Bool {
-        let c = t.bottom.usingColorSpace(.sRGB) ?? t.bottom
-        let lum = 0.299 * c.redComponent + 0.587 * c.greenComponent + 0.114 * c.blueComponent
-        return lum < 0.42
+        return ["Black", "Ranger Green", "JG Camo", "Navy"].contains(t.name)
     }
 }
 

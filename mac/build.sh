@@ -16,6 +16,9 @@ swiftc -O -swift-version 5 -target arm64-apple-macos12.0 \
     Sources/*.swift \
     -framework Cocoa -framework WebKit -framework Carbon -framework ServiceManagement
 
+# pictures and the icon (Resources/default-tablet.png, AppIcon.png, AppIcon.icns)
+if [ -d Resources ]; then cp -R Resources/. "$APP/Contents/Resources/"; fi
+
 sed "s/__VERSION__/$VERSION/g" Info.plist.template > "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 

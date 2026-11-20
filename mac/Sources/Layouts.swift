@@ -57,7 +57,7 @@ struct Layout {
 
     static let atak = Layout(
         id: "atak", name: "ATAK tablet", logical: CGSize(width: 774, height: 396),
-        screen: CGRect(x: 126, y: 69, width: 522, height: 250), holeRadius: 13, gear: CGPoint(x: 692, y: 50),
+        screen: CGRect(x: 126, y: 73, width: 522, height: 250), holeRadius: 13, gear: CGPoint(x: 692, y: 50),
         compactLabels: false, labelAt: CGPoint(x: 0, y: 0), pageTag: "tablet", softKeys: [], spots: [])
 
     static let pilot = Layout(
@@ -158,7 +158,7 @@ enum ArtPainter {
         ctx.strokePath()
         // dark ring around the screen
         ctx.setFillColor(gray(0.11).cgColor)
-        ctx.addPath(rounded(CGRect(x: 114, y: 57, width: 546, height: 274), 20))
+        ctx.addPath(rounded(CGRect(x: 114, y: 61, width: 546, height: 274), 20))
         ctx.fillPath()
         // speaker grille
         ctx.setFillColor(theme.bottom.withAlphaComponent(0.75).cgColor)

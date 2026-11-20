@@ -278,7 +278,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         f.note("Use your own PNG picture of the device instead of the drawn one (transparent background, same shape as the drawing).")
         f.buttons([
             ("Choose a picture for this device...", { [unowned self] in self.app.chooseSkin(for: self.settings.layout) }),
-            ("Use the drawn art", { [unowned self] in self.app.resetSkin(for: self.settings.layout) })
+            ("Use the supplied picture", { [unowned self] in self.app.resetSkin(for: self.settings.layout) })
         ])
         addTab("General", f)
     }
