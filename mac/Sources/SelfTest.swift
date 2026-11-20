@@ -95,25 +95,37 @@ final class SelfTest {
     }
 
     // a picture of the tablet window, with the live page and the labels on top, on a blue background
+    // (a view that contains a live web page can not be drawn in one go, so: the page first, then the frame on its own with the
+    // page and everything over it hidden, then the parts that lie over the page each on their own, all put together)
     func shot(_ name: String) async {
         guard let cv = app.window.contentView as? TabletView else { return }
-        guard let base = render(cv) else { return }
         var webImage: NSImage?
         if !app.web.isHidden { webImage = await webSnapshot() }
-        let hudImage = render(cv.hud)
+        var overlays: [NSView] = [cv.bar, cv.hud]
+        if let sp = cv.sidePanel { overlays.append(sp) }
+        let hiddenBefore = overlays.map { $0.isHidden }
+        let webHiddenBefore = app.web.isHidden
+        app.web.isHidden = true
+        for v in overlays { v.isHidden = true }
+        let base = render(cv)
+        app.web.isHidden = webHiddenBefore
+        for (i, v) in overlays.enumerated() { v.isHidden = hiddenBefore[i] }
+        var layers: [(NSImage, NSRect)] = []
+        for v in overlays where !v.isHidden {
+            if let img = render(v) { layers.append((img, v.frame)) }
+        }
         let size = cv.bounds.size
         let out = NSImage(size: size)
         out.lockFocus()
         NSColor(srgbRed: 0.23, green: 0.37, blue: 0.54, alpha: 1).setFill()
         NSRect(origin: .zero, size: size).fill()
-        base.draw(in: NSRect(origin: .zero, size: size))
+        if let b = base { b.draw(in: NSRect(origin: .zero, size: size)) }
         if let wi = webImage {
             let wf = app.web.frame
             wi.draw(in: NSRect(x: wf.minX, y: size.height - wf.maxY, width: wf.width, height: wf.height))
         }
-        if let hi = hudImage, !cv.hud.isHidden {
-            let hf = cv.hud.frame
-            hi.draw(in: NSRect(x: hf.minX, y: size.height - hf.maxY, width: hf.width, height: hf.height))
+        for (img, f) in layers {
+            img.draw(in: NSRect(x: f.minX, y: size.height - f.maxY, width: f.width, height: f.height))
         }
         out.unlockFocus()
         savePNG(out, name)

@@ -250,7 +250,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             self.settings.opacity = Int(v)
             self.changed()
         }, suffix: "%")
-        f.slider("Page width (smaller = bigger text)", min: 500, max: 2400, get: { Double(Settings.shared.pageWidth) }, set: { [unowned self] v in
+        f.slider("Page width (smaller = bigger)", min: 500, max: 2400, get: { Double(Settings.shared.pageWidth) }, set: { [unowned self] v in
             self.app.setPageWidth(Int(v))
         })
         f.popup("Where it opens", items: ["Middle of the screen", "Bottom-right corner", "Where I last left it"], get: { [unowned self] in
@@ -293,7 +293,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         f.check("Show the live screen when minimized", get: { Settings.shared.liveMini }, set: { [unowned self] in
             self.app.setLiveMini($0)
         })
-        f.slider("Live view size (width of the monitor)", min: 15, max: 60, get: { Double(Settings.shared.livePct) }, set: { [unowned self] v in
+        f.slider("Live view size (% of monitor)", min: 15, max: 60, get: { Double(Settings.shared.livePct) }, set: { [unowned self] v in
             self.settings.livePct = Int(v)
             self.changed()
         }, suffix: "%")
