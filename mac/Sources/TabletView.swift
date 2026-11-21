@@ -19,6 +19,9 @@ final class BarView: NSView {
     var onReload: (() -> Void)?
     var onHome: (() -> Void)?
     var onGo: ((String) -> Void)?
+    // keep clear of the opening's rounded top corners
+    var leftInset: CGFloat = 0 { didSet { needsLayout = true } }
+    var rightInset: CGFloat = 0 { didSet { needsLayout = true } }
 
     override var isFlipped: Bool { return true }
 
@@ -70,13 +73,13 @@ final class BarView: NSView {
         super.layout()
         let h = bounds.height
         let bs = max(18.0, h - 6.0)
-        var x: CGFloat = 4
+        var x: CGFloat = 4 + leftInset
         for b in [backButton, forwardButton, reloadButton, homeButton] {
             b.frame = NSRect(x: x, y: (h - bs) / 2, width: bs, height: bs)
             x += bs + 2
         }
         let fh = min(h - 6.0, 22.0)
-        field.frame = NSRect(x: x + 4, y: (h - fh) / 2, width: max(40, bounds.width - x - 8), height: fh)
+        field.frame = NSRect(x: x + 4, y: (h - fh) / 2, width: max(40, bounds.width - x - 8 - rightInset), height: fh)
     }
 }
 
@@ -406,12 +409,19 @@ final class TabletView: NSView {
             fit(web, to: o, mask: webMask, scale: s)
             web.layer?.cornerRadius = 0
             web.layer?.masksToBounds = false
-            if barH > 0 { fit(bar, to: o, mask: barMask, scale: s) }
+            if barH > 0 {
+                let ins = o.topInsets(height: barH, scale: s)
+                bar.leftInset = ins.0
+                bar.rightInset = ins.1
+                fit(bar, to: o, mask: barMask, scale: s)
+            }
             if pw > 0, let p = sidePanel { fit(p, to: o, mask: panelMask, scale: s) }
         } else {
             web.layer?.mask = nil
             bar.layer?.mask = nil
             sidePanel?.layer?.mask = nil
+            bar.leftInset = 0
+            bar.rightInset = 0
             web.layer?.cornerRadius = layoutDef.holeRadius * s * 0.8
             web.layer?.masksToBounds = true
         }

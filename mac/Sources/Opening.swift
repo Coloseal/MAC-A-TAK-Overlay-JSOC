@@ -30,6 +30,21 @@ struct OpeningShape {
         return p
     }
 
+    // how far the opening's rounded corners cut in over the top `height` points (at scale k): (left, right) in points
+    func topInsets(height: CGFloat, scale k: CGFloat) -> (CGFloat, CGFloat) {
+        let n = left.count
+        if n < 2 { return (0, 0) }
+        let rowH = rect.height * k / CGFloat(n)
+        let rows = min(n, max(1, Int((height / rowH).rounded(.up))))
+        var l: CGFloat = 0
+        var r: CGFloat = 0
+        for i in 0..<rows {
+            l = max(l, left[i])
+            r = max(r, 1 - right[i])
+        }
+        return (l * rect.width * k, r * rect.width * k)
+    }
+
     // the outline in the tablet's logical coordinates
     func logicalPath() -> CGPath {
         var t = CGAffineTransform(translationX: rect.minX, y: rect.minY)
