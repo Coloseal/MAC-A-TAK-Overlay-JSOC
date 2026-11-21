@@ -1,0 +1,62 @@
+Tac Map Overlay self-test  v0.2.0  macOS Version 26.7.2 (Build 25G332)
+PASS  timer text
+PASS  timer parsing
+PASS  bearing / distance 200 m east   -- DISTANCE  200 m   (0.20 km) | BEARING   090 deg   1600 mils   E | BACK AZ   270 deg   4800 mils
+PASS  bearing / distance 1000 m north (8 digits)   -- DISTANCE  1,000 m   (1.00 km) | BEARING   000 deg   0000 mils   N | BACK AZ   180 deg   3200 mils
+PASS  grid parsing
+PASS  version compare
+PASS  update file parsing
+PASS  shortcut ids are different
+PASS  shortcuts registered   -- 11 registered (10 + emergency)
+PASS  every pilot button has a default
+PASS  the map page loads   -- JSOC TacMap — Access Required
+PASS  ad block rules compiled
+PASS  page flag for the map site
+PASS  starts minimized   -- state=docked width=340.0
+PASS  opens to the set size   -- width=799.0 wanted=799.0
+PASS  the picture's screen opening is found and the page fills it   -- Optional((98.54935622317596, 64.1564245810056, 550.3261802575107, 258.83798882681566))
+PASS  a theme recolours the tablet picture
+PASS  address bar shows
+PASS  notes pad opens
+PASS  mission log line
+PASS  tools panel opens
+PASS  calculator in the panel   -- DISTANCE  200 m   (0.20 km)
+BEARING   090 deg   1600 mils   E
+BACK AZ   270 deg   4800 mils
+PASS  9-line text   -- 9-LINE CAS | LINE 1 IP / BP: BP MIKE | LINE 2 HEADING: 270 | 
+PASS  checklist   -- 8 items
+PASS  timer running
+PASS  timer ended with an alarm
+PASS  alarm dismissed
+PASS  stopwatch counts   -- 1298 ms
+PASS  stopwatch resets
+PASS  mission clock
+PASS  mission clock reset
+PASS  timer shortcut
+PASS  size change
+PASS  preset restores the size   -- 78 vs 78
+PASS  page zoom
+PASS  zoom reset
+PASS  transparency cycles
+PASS  settings window opens
+PASS  settings window closes
+PASS  pilot layout open   -- labels=24
+PASS  pilot page switch
+PASS  rocker changes transparency   -- 90
+PASS  minimized to the little tablet
+PASS  live view on   -- state=live clickthrough=true
+PASS  live view default size about 30%   -- 29.98046875%
+PASS  map page told it is in the live view   -- {"mode":"mini","attr":"mini"}
+PASS  test page in the live view = mini   -- {"mode":"mini","attr":"mini","ev":"mini"}
+PASS  TOC video wall open while minimized = full   -- {"mode":"full","attr":"full","ev":"mini>full"}
+PASS  TOC video wall closed = mini again   -- {"mode":"mini","attr":"mini","ev":"mini>full>mini"}
+PASS  peek opens the tablet
+PASS  letting go minimizes to the live view
+PASS  still full with the wall open after peek   -- {"mode":"full","attr":"full","ev":"mini>full>mini>full>full>full>full"}
+PASS  move mode on
+PASS  move mode off
+PASS  live view off = little tablet
+PASS  notes shortcut opens the tablet with the notes
+PASS  toast works
+RESULT  passed=57  failed=0
+DONE
